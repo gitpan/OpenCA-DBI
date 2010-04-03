@@ -1,6 +1,7 @@
 ## OpenCA::DBI
 ##
-## Copyright (C) 2000-2001 Michael Bell (michael.bell@web.de)
+## Written by Michael Bell for the OpenCA project 2000
+## Copyright (C) 2000-2004 The OpenCA Project
 ## GNU public license
 ##
 ## Code parts from OpenCA::DB are under the following license
@@ -15,7 +16,7 @@
 ## lhash, DES, etc., code; not just the SSL code.  The documentation
 ## included with this distribution is covered by the same copyright terms
 ## 
-## Copyright remains Massimiliano Pala's, and as such any Copyright notices
+## // Copyright remains Massimiliano Pala's, and as such any Copyright notices
 ## in the code are not to be removed.
 ## If this package is used in a product, Massimiliano Pala should be given
 ## attribution as the author of the parts of the library used.
@@ -32,8 +33,8 @@
 ##    documentation and/or other materials provided with the distribution.
 ## 3. All advertising materials mentioning features or use of this software
 ##    must display the following acknowledgement:
-##    "This product includes OpenCA software written by Massimiliano Pala
-##     (madwolf@openca.org) and the OpenCA Group (www.openca.org)"
+## //   "This product includes OpenCA software written by Massimiliano Pala
+## //    (madwolf@openca.org) and the OpenCA Group (www.openca.org)"
 ## 4. If you include any Windows specific code (or a derivative thereof) from 
 ##    some directory (application code) you must include an acknowledgement:
 ##    "This product includes OpenCA software (www.openca.org)"
@@ -60,22 +61,33 @@
 
 ## special thanks
 ##
-## MySQL:	Julio Sánchez Fernández <jsanchez@users.sf.net>
+## MySQL:	Julio Sanchez Fernandez <jsanchez@users.sf.net>
 ## Oracle:	balamood@vt.edu (if somebody knows the fullname I add it
 ##
 ## please write a note to us if one of the addresses is wrong
 
 use strict;
+use utf8;
 
 package OpenCA::DBI;
 
 our ($errno, $errval);
+our ($lastUpdate);
 
 ## We must store/retrieve CRLs,CERTs,REQs objects:
 ## proper instances of object management classes are
 ## needed.
 ## see http://www.informatik.hu-berlin.de/~mbell/OpenCA/OpenCA_DBI/OpenCA_DBI.html
 ## for more information about the datastructure
+
+## The locale category LC_MESSAGES is not exported by the POSIX
+## module on older Perl versions.
+use Locale::Messages qw (LC_MESSAGES);
+
+use POSIX ('setlocale');
+
+## Set the locale according to our environment.
+setlocale (LC_MESSAGES, '');
 
 use OpenCA::REQ;
 use OpenCA::X509;
@@ -84,12 +96,15 @@ use OpenCA::OpenSSL;
 use OpenCA::Tools;
 use DBI;
 
+## define the SQL_* values.
+use DBI qw(:sql_types);
+
 ## the other use directions depends from the used databases
 
-## $Revision: 1.95 $
+## $Revision: 1.46 $
 
 # code contributed by Andreas Fitzner
-($OpenCA::DBI::VERSION = '$Revision: 1.95 $' )=~ s/(?:^.*: (\d+))|(?:\s+\$$)/defined $1?"0\.9":""/eg; 
+($OpenCA::DBI::VERSION = '$Revision: 1.46 $' )=~ s/(?:^.*: (\d+))|(?:\s+\$$)/defined $1?"2\.0":""/eg; 
 
 ##################
 ## DB Org-stuff ##
@@ -99,82 +114,117 @@ use DBI;
 ##  PLEASE read carefully the following conventions before you            ##
 ##  edit something of the database code                                   ##
 ############################################################################
-##  1.  don't use plural at sometime because you can come into trouble    ##
+##  1.  do not use plural at sometime because you can come into trouble   ##
 ##      with types                                                        ##
 ##  2.  please write all types and all names small - this is not good     ##
 ##      sql-style but sybase ase and ibm db2 for example has no problems  ##
-##      with this (they made it big ;-) ). PostgreSQL has with it's       ##
+##      with this (they made it big ;-) ). PostgreSQL has with the        ##
 ##      standard configuration (tested on debian 2.2 i386) really big     ##
 ##      trouble with names of tables and variables in big letters because ##
-##      it tries to convert it to small letters but it don't works        ##
+##      it tries to convert it to small letters but it does not work      ##
 ##      correctly (I think because it reports errors of mdopen that the   ##
 ##      lowercase forget the filename).                                   ##
 ############################################################################
 
 $OpenCA::DBI::SQL = {
-                     TABLE => { 
-                               REQUEST        => "request",
-                               CERTIFICATE    => "certificate",
-                               CA_CERTIFICATE => "ca_certificate",
-                               CRR            => "crr",
-                               CRL            => "crl",
-                              },
-                     ## I use here several duplicate array
-                     ## somewhere I have to stop the complexity ...
-                     VARIABLE => {
-                                  DATE                  => ["submit_date",          "TEXT"],
-                                  SUBMIT_DATE           => ["submit_date",          "TEXT"],
-                                  FORMAT                => ["format",        "TEXT"],
-                                  DATA                  => ["data",          "LONGTEXT"],
+     TABLE => { 
+                REQUEST        => "request",
+                CERTIFICATE    => "certificate",
+                CA_CERTIFICATE => "ca_certificate",
+                CRR            => "crr",
+                CRL            => "crl",
+		USER	      => "user",
+		USER_DATA      => "user_data",
+		MESSAGES	      => "messages",
+                },
+      ## I use here several duplicate array
+      ## somewhere I have to stop the complexity ...
+      VARIABLE => {
+                DATE                  => ["submit_date",          "TEXT"],
+                SUBMIT_DATE           => ["submit_date",          "TEXT"],
+                FORMAT                => ["format",        "TEXT"],
+                DATA                  => ["data",          "LONGTEXT"],
+                SERIAL                => ["serial",        "BIGINT"],
+                ROWID	              => ["rowid",         "AUTO_ID"],
+                KEY                   => ["mykey",         "TEXT_KEY"],
+                CERTIFICATE_SERIAL    => ["cert_key",      "DECIMAL"],
 
-                                  SERIAL                => ["serial",        "BIGINT"],
-                                  KEY                   => ["mykey",         "TEXT_KEY"],
-
-                                  CERTIFICATE_SERIAL    => ["cert_key",      "BIGINT"],
-                                  # same like certificate_serial but for CRR
-                                  REVOKE_CERTIFICATE_SERIAL    => ["cert_key",      "BIGINT"],
-                                  CA_CERTIFICATE_SERIAL => ["ca_cert_key",   "TEXT_KEY"],
-                                  REQUEST_SERIAL        => ["req_key",       "BIGINT"],
-                                  CSR_SERIAL            => ["req_key",       "BIGINT"],
-                                  CRR_SERIAL            => ["crr_key",       "BIGINT"],
-                                  CRL_SERIAL            => ["crl_key",       "TEXT_KEY"],
-
-                                  LOG_SERIAL            => ["action_number", "BIGINT"],
-                                  SIGNATURE_SERIAL      => ["action_number", "BIGINT"],
-                                  # end of redefined variables
+                # same like certificate_serial but for CRR
+                REVOKE_CERTIFICATE_SERIAL    => ["cert_key",      "DECIMAL"],
+                CA_CERTIFICATE_SERIAL => ["ca_cert_key",   "TEXT_KEY"],
+                REQUEST_SERIAL        => ["req_key",       "BIGINT"],
+                CSR_SERIAL            => ["req_key",       "BIGINT"],
+                CRR_SERIAL            => ["crr_key",       "BIGINT"],
+                APPROVED_AFTER        => ["approved_after", "BIGINT"],
+                DELETED_AFTER         => ["deleted_after", "BIGINT"],
+                ARCHIVED_AFTER        => ["archivied_after", "BIGINT"],
+		#CRL_SERIAL           => ["crl_key",       "TEXT_KEY"],
+                CRL_SERIAL            => ["crl_key",       "BIGINT"],
+                LOG_SERIAL            => ["action_number", "BIGINT"],
+                SIGNATURE_SERIAL      => ["action_number", "BIGINT"],
+                # end of redefined variables
                                   
-                                  # for searching
-                                  DN                    => ["dn",            "TEXT"],
-                                  # same like dn but for CRRs
-                                  REVOKE_CERTIFICATE_DN => ["dn",            "TEXT"],
-                                  CN                    => ["cn",            "TEXT"],
-                                  EMAIL                 => ["email",         "TEXT"],
-                                  RA                    => ["ra",            "TEXT"],
-                                  RAO                   => ["rao",           "TEXT"],
-                                  Operator              => ["rao",           "TEXT"],
-                                  OPERATOR              => ["rao",           "TEXT"],
-                                  LAST_UPDATE           => ["last_update",   "TEXT"],
-                                  NEXT_UPDATE           => ["next_update",   "TEXT"],
-                                  DATATYPE              => ["datatype",      "TEXT"],
-                                  ROLE                  => ["role",          "TEXT"],
-                                  PUBKEY                => ["public_key",    "TEXT"],
-                                  NOTAFTER              => ["notafter",      "BIGINT"],
-                                  SCEP_TID              => ["scep_tid",      "TEXT"],
-                                  LOA                   => ["loa",           "TEXT"],
+		# Order By
+                CERTIFICATE_ORDERBY    		=> ["rowid"],
+                REVOKE_CERTIFICATE_ORDERBY 	=> ["rowid"],
+                CA_CERTIFICATE_ORDERBY 		=> ["rowid"],
+                REQUEST_ORDERBY       		=> ["rowid"],
+                CSR_ORDERBY            		=> ["rowid"],
+                CRR_ORDERBY            		=> ["rowid"],
+                CRL_ORDERBY            		=> ["rowid"],
+                USER_ORDERBY           		=> ["rowid"],
+                LOG_ORDERBY            		=> ["action_number"],
+				  
+                # for searching
+                DN                => ["dn",            "TEXT"],
+                # same like dn but for CRRs
+                REVOKE_CERTIFICATE_DN => ["dn",        "TEXT"],
+                CN                => ["cn",            "TEXT"],
+                EMAIL             => ["email",         "TEXT"],
+                RA                => ["ra",            "TEXT"],
+                RAO               => ["rao",           "TEXT"],
+                OPERATOR          => ["rao",           "TEXT"],
+                LAST_UPDATE       => ["last_update",   "BIGINT"],
+                NEXT_UPDATE       => ["next_update",   "BIGINT"],
+                DATATYPE          => ["datatype",      "TEXT"],
+                ROLE              => ["role",          "TEXT"],
+                PUBKEY            => ["public_key",    "TEXT"],
+                NOTAFTER          => ["notafter",      "BIGINT"],
+                NOTBEFORE         => ["notbefore",      "BIGINT"],
+                SUSPENDED_AFTER   => ["suspended_after",    "BIGINT"],
+                REVOKED_AFTER     => ["revoked_after",      "BIGINT"],
+                INVALIDITY_REASON => ["invalidity_reason",  "TEXT"],
+                OWNER     	  => ["owner",  "OWNER"],
+		LAST_ACTIVITY	  => ["last_activity", "BIGINT"],
+                SCEP_TID          => ["scep_tid",      "TEXT"],
+                LOA               => ["loa",           "TEXT"],
                                   
-                                  # logging and integrity support
-                                  DATATYPE              => ["datatype",      "TEXT"],
-                                  STATUS                => ["status",        "TEXT"],
-                                  REASON                => ["reason",        "TEXT"],
-                                  ACTION_NUMBER         => ["action_number", "BIGINT"],
-                                  MODULETYPE            => ["moduletype",    "TEXT"],
-                                  MODULE                => ["module",        "TEXT"],
-                                  LOG_SUBMIT_DATE       => ["log_submit_date",   "TEXT"],
-                                  LOG_DO_DATE           => ["log_do_date",   "TEXT"],
-                                  ROLE_SIGNATURE        => ["role_signature","TEXT"],
-                                  HEADER_SIGNATURE      => ["header_signature","TEXT"],
-                                 }
-                    };
+                # logging and integrity support
+                DATATYPE        => ["datatype",      "TEXT"],
+                STATUS          => ["status",        "TEXT"],
+                REASON          => ["reason",        "TEXT"],
+                ACTION_NUMBER   => ["action_number", "BIGINT"],
+                MODULETYPE      => ["moduletype",    "TEXT"],
+                MODULE          => ["module",        "TEXT"],
+                LOG_SUBMIT_DATE => ["log_submit_date",   "TEXT"],
+                LOG_DO_DATE     => ["log_do_date",   "TEXT"],
+
+		# user managing support
+		USER_ID		=> ["user_id", "USER_ID"],
+		EXT_USER_ID	=> ["user_id", "EXT_USER_ID"],
+		SECRET		=> ["secret", "TEXT"],
+		DATA_SOURCE	=> ["data_source", "TEXT_KEY"],
+		EXTERN_ID	=> ["extern_id", "TEXT_KEY"],
+		DATA_NAME	=> ["data_name", "TEXT_KEY"],
+		DATA_VALUE	=> ["data_value", "TEXT"],
+
+		# messages
+		SUBJECT		=> ["subject", "TEXT_KEY" ],
+		FROM		=> ["sender", "EXT_USER_ID" ],
+		TO		=> [ "receiver", "EXT_USER_ID" ],
+		HEADER		=> [ "header", "TEXT" ],
+                }
+	};
 
 ## second call to $OpenCA::DBI::SQL because I use content of this variable
 $OpenCA::DBI::SQL->{TABLE_STRUCTURE} = 
@@ -187,14 +237,22 @@ $OpenCA::DBI::SQL->{TABLE_STRUCTURE} =
                "CN",
                "EMAIL",
                "RA",
-               "Operator",
+               "OPERATOR",
                "STATUS",
                "ROLE",
                ## should be part of the header itself
                ## "HEADER_SIGNATURE",
                "PUBKEY",
                "SCEP_TID",
-               "LOA"
+               "LOA",
+	       "NOTBEFORE",
+	       "NOTAFTER",
+	       "APPROVED_AFTER",
+	       "DELETED_AFTER",
+	       "ARCHIVED_AFTER",
+	       "CA_CERTIFICATE_SERIAL",
+	       "OWNER",
+	       "ROWID",
               ],
    CERTIFICATE => [
                    "CERTIFICATE_SERIAL",
@@ -205,14 +263,16 @@ $OpenCA::DBI::SQL->{TABLE_STRUCTURE} =
                    "EMAIL",
                    "STATUS",
                    "ROLE",
-                   ## why a signature should be searchable?
-                   ## "ROLE_SIGNATURE",
-                   ## should be part of the header itself
-                   ## "HEADER_SIGNATURE",
                    "PUBKEY",
                    "NOTAFTER",
+                   "NOTBEFORE",
                    "CSR_SERIAL",
-                   "LOA"
+                   "LOA",
+		   "SUSPENDED_AFTER",
+		   "REVOKED_AFTER",
+		   "INVALIDITY_REASON",
+	       	   "OWNER",
+	   	   "ROWID",
                   ],
    CA_CERTIFICATE => [
                       ## real serial senseless because at every time zero
@@ -224,7 +284,12 @@ $OpenCA::DBI::SQL->{TABLE_STRUCTURE} =
                       "EMAIL",
                       "STATUS",
                       "PUBKEY",
-                      "NOTAFTER"
+                      "NOTAFTER",
+                      "NOTBEFORE",
+		      "SUSPENDED_AFTER",
+		      "REVOKED_AFTER",
+		      "INVALIDITY_REASON",
+	   	      "ROWID",
                      ],
    CRR => [
            "CRR_SERIAL",
@@ -236,10 +301,17 @@ $OpenCA::DBI::SQL->{TABLE_STRUCTURE} =
            "CN",
            "EMAIL",
            "RA",
-           "Operator",
+           "OPERATOR",
            "STATUS",
            "REASON",
+	   "NOTBEFORE",
+	   "NOTAFTER",
+	   "APPROVED_AFTER",
+	   "DELETED_AFTER",
+	   "ARCHIVED_AFTER",
            "LOA",
+	   "OWNER",
+	   "ROWID",
            ## should be part of the header itself
            ## "HEADER_SIGNATURE"
           ],
@@ -250,8 +322,50 @@ $OpenCA::DBI::SQL->{TABLE_STRUCTURE} =
            "DATA",
            "LAST_UPDATE",
            "NEXT_UPDATE",
+	   "ROWID",
           ],
+   USER => [
+	   "ROWID",
+	   "USER_ID",
+	   "DATA_SOURCE",
+	   "SECRET",
+	   "NOTAFTER",
+	   "NOTBEFORE",
+	   "STATUS",
+	   "EXTERN_ID",
+	   "SUSPENDED_AFTER",
+	   "REVOKED_AFTER",
+	   "LAST_ACTIVITY",
+	   "INVALIDITY_REASON",
+	   ],
+   USER_DATA => [
+	   "ROWID",
+	   "USER_ID",
+	   "DATA_NAME",
+	   "DATA_VALUE",
+	   "DATA_SOURCE",
+	   ],
+   MESSAGES => [
+	   "ROWID",
+	   "FROM",
+	   "TO",
+	   "SUBJECT",
+	   "NOTBEFORE",
+	   "HEADER",
+	   "DATA",
+	   "STATUS",
+	   ],
   };
+
+$OpenCA::DBI::SQL->{FOREIGN_KEYS} = {
+	USER_DATA => { 
+			USER_ID => ["USER", "USER_ID"] 
+		     },
+	MESSAGES  => { 
+			FROM => [ "USER", "USER_ID" ],
+		 	TO   => [ "USER", "USER_ID" ],
+		     },
+};
 
 $OpenCA::DBI::STATUS = {
 			EXIST       => 1,
@@ -347,6 +461,12 @@ $OpenCA::DBI::ERROR = {
   ILLEGAL_STATUS               => 10065,
   ILLEGAL_DATE                 => 10067,
   ILLEGAL_ARGUMENT             => 10068,
+  MISSING_DATABASE_PARAMETERS  => 10070,
+  MISSING_GETTEXT              => 10071,
+  MISSING_DATABASE_TYPE        => 10072,
+  MISSING_DATABASE_NAME        => 10073,
+  MISSING_DATABASE_USER        => 10074,
+  MISSING_DATABASE_PASSWD      => 10075,
 
   # DB-errors
   # using bitwise-or for DIAGNOSTICS so (ERROR+20000) 
@@ -437,6 +557,12 @@ $OpenCA::DBI::MESSAGE = {
   10065 => "ILLEGAL_STATUS",
   10067 => "ILLEGAL_DATE",
   10068 => "There is an illegal or unsupported argument.",
+  10070 => "Missing database parameters (type, name, user or passphrase). Does the passphrase be empty?",
+  10071 => "The translation function is missing.",
+  10072 => "The database type is missing.",
+  10073 => "The database name is missing.",
+  10074 => "The database user is missing.",
+  10075 => "The database passphrase is missing. There must be a database passphrase.",
 
   11111 => "Do not commit if the database or the module itself fails.",
   # DB-errors
@@ -498,58 +624,84 @@ $OpenCA::DBI::DB = {
                                     LONGTEXT   => "text",
                                     TEXT_KEY   => "text",
                                     BIGINT     => "int8",
+				    AUTO_ID    => "BIGSERIAL",
+				    DECIMAL    => "DECIMAL (60, 0)",
+				    USER_ID    => "VARCHAR(255)",
+				    EXT_USER_ID => "VARCHAR(255) NOT NULL",
+				    OWNER      => "VARCHAR(255)",
                                     PRIMARYKEY => "PRIMARY KEY NOT NULL",
                                    },
                            DBI_OPTION => {
                                           RaiseError => 0, 
                                           Taint => 0, 
                                           AutoCommit => 0},
-                           LIMIT => "__QUERY__ LIMIT __MAXITEMS__"
+                           LIMIT => "__QUERY__ LIMIT __MAXITEMS__",
+			   FOREIGN_KEY => "ALTER TABLE __TABLE__ ADD CONSTRAINT __COL__REF__TARGET_COL__ FOREIGN KEY (__COL__) REFERENCES __TARGET_TABLE__(__TARGET_COL__)",
                           },
                     mysql => {
                               TYPE => {
                                        ## numeric available but not documented
-                                       TEXT       => "TEXT",
-                                       LONGTEXT   => "TEXT",
-                                       TEXT_KEY   => "VARCHAR (255)",
-                                       BIGINT     => "BIGINT",
-                                       PRIMARYKEY => "NOT NULL PRIMARY KEY",
-                                      },
+                                    TEXT       => "TEXT",
+                                    LONGTEXT   => "TEXT",
+                                    TEXT_KEY   => "VARCHAR (255)",
+                                    BIGINT     => "BIGINT",
+				    DECIMAL    => "DECIMAL (60, 0)",
+				    USER_ID    => "VARCHAR(255)",
+				    AUTO_ID    => "SERIAL",
+				    EXT_USER_ID => "VARCHAR(255) NOT NULL",
+				    OWNER      => "VARCHAR(255)",
+                                    PRIMARYKEY => "NOT NULL PRIMARY KEY",
+				    
+                                    },
                               DBI_OPTION => {RaiseError => 0,
                                              AutoCommit => 0},
-                              CREATE_TABLE_OPTION => "TYPE=BDB",
-                              LIMIT => "__QUERY__ LIMIT __MAXITEMS__"
+                              # CREATE_TABLE_OPTION => "TYPE=BDB ENGINE=INNODB CHARSET=utf8",
+                              CREATE_TABLE_OPTION => "ENGINE=INNODB CHARSET=utf8",
+                              LIMIT => "__QUERY__ LIMIT __MAXITEMS__",
+			      FOREIGN_KEY => "ALTER TABLE __TABLE__ ADD CONSTRAINT __COL___REF___TARGET_COL__ FOREIGN KEY (__COL__) REFERENCES __TARGET_TABLE__ (__TARGET_COL__)",
                              },
                     DB2 => {
                             TYPE => {
-                                     TEXT       => "long varchar",
-                                     LONGTEXT   => "long varchar",
-                                     ## 255 is the limit for a index key in db2
-                                     TEXT_KEY   => "varchar (255)",
-                                     BIGINT     => "decimal (31, 0)",
-                                     PRIMARYKEY => "PRIMARY KEY NOT NULL",
+                                    TEXT       => "long varchar",
+                                    LONGTEXT   => "long varchar",
+                                    ## 255 is the limit for a index key in db2
+                                    TEXT_KEY   => "varchar (255)",
+                                    BIGINT     => "decimal (31, 0)",
+				    DECIMAL    => "DECIMAL (31, 0)",
+				    USER_ID    => "VARCHAR(255)",
+				    EXT_USER_ID=> "VARCHAR(255) NOT NULL",
+				    OWNER      => "VARCHAR(255)",
+				    AUTO_ID    => "SERIAL",
+                                    PRIMARYKEY => "PRIMARY KEY NOT NULL",
                                     },
                             DBI_OPTION => {
                                            RaiseError => 0, 
                                            Taint => 0, 
                                            AutoCommit => 0},
-                            LIMIT => "__QUERY__ FETCH FIRST __MAXITEMS__ ROWS ONLY"
+                            LIMIT => "__QUERY__ FETCH FIRST __MAXITEMS__ ROWS ONLY",
+			    FOREIGN_KEY => "ALTER TABLE __TABLE__ ADD CONSTRAINT __COL__REF__TARGET_COL__ FOREIGN KEY (__COL__) REFERENCES __TARGET_TABLE__(__TARGET_COL__)",
                            },
                     Oracle => {
                             TYPE => {
-                                     TEXT       => "varchar2 (1999)",
-                                     LONGTEXT   => "LONG",
-                                     ## 2000 is the limit for varchar in Oracle7
-                                     TEXT_KEY   => "varchar2 (1999)",
-                                     BIGINT     => "number (38)",
-                                     PRIMARYKEY => "PRIMARY KEY NOT NULL",
+                                    TEXT       => "varchar2 (1999)",
+                                    LONGTEXT   => "LONG",
+                                    ## 2000 is the limit for varchar in Oracle7
+                                    TEXT_KEY   => "varchar2 (1999)",
+                                    BIGINT     => "number (38)",
+				    DECIMAL    => "DECIMAL (38, 0)",
+				    USER_ID    => "VARCHAR2(255)",
+				    EXT_USER_ID => "VARCHAR2(255) NOT NULL",
+				    OWNER      => "VARCHAR(255)",
+				    AUTO_ID    => "DECIMAL(38,0) NOT NULL AUTO INCREMENT",
+                                    PRIMARYKEY => "PRIMARY KEY NOT NULL",
                                     },
                             DBI_OPTION => {
                                            RaiseError => 0, 
                                            Taint => 0, 
                                            AutoCommit => 0,
                                            LongReadLen => 32767},
-                            LIMIT => "select * from ( __QUERY__ ) where rownum <= __MAXITEMS__"
+                            LIMIT => "select * from ( __QUERY__ ) where rownum <= __MAXITEMS__",
+			     FOREIGN_KEY => "ALTER TABLE __TABLE__ ADD CONSTRAINT __COL__REF__TARGET_COL__ FOREIGN KEY (__COL__) REFERENCES __TARGET_TABLE__(__TARGET_COL__) INITIALLY DEFERRED DEFERRABLE"
                            },
                    };
 
@@ -570,6 +722,7 @@ my $params = {
 	      backend => undef,
 	      ## debugging is off !!!
               DEBUG  => 0,
+              DEBUG_STDERR  => 0,
               ERRNO  => 0,
               ERRVAL => "",
 	     };
@@ -590,23 +743,33 @@ sub new {
  
   bless $self, $class;
 
-  ## because db uses variablenames etc. I can't define it in $params :-(
+  ## because db uses variablenames etc. I cannot define it in $params :-(
 
   # ok here I start ;-)
 
   my $keys = { @_ };
 
-  print "Starting to init a new OpenCA::DBI\n" if ($self->{DEBUG});
+  $self->debug ("new: Starting to init a new OpenCA::DBI");
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   # non-DB-specific
 
   $self->{DEBUG}          = 1 if ($keys->{DEBUG});
-
+  $self->{DEBUG_STDERR}   = 1 if ($keys->{DEBUG_STDERR});
+  $self->{gettext}        = $keys->{GETTEXT};
   $self->{backend}        = $keys->{SHELL};
 
-  print "  defining the class parameters<br>\n" if ($self->{DEBUG});
+
+  $self->debug ("new: checking for backend");
+
+  if (not $self->{backend})
+  {
+    $self->set_error ( $OpenCA::DBI::ERROR->{MISSING_BACKEND} );
+    return undef;
+  }
+
+  $self->debug ("new: defining the class parameters");
 
   # The minimum I need is remote: 
   # type, host, port, name, user, passwd
@@ -617,23 +780,54 @@ sub new {
   $self->{DB_Name}   = $keys->{DB_Name};
   $self->{DB_User}   = $keys->{DB_User};
   $self->{DB_Passwd} = $keys->{DB_Passwd};
+  $self->{DB_Namespace} = $keys->{DB_Namespace};
+
+  ## rewrite table names if there is a namespace
+
+  $self->debug ("new: rewrite table spaces if necessary (namespace)");
+  if ($keys->{DB_Namespace})
+  {
+      my $tableprefix = $keys->{DB_Namespace}.".";
+      foreach my $table (keys %{$OpenCA::DBI::SQL->{TABLE}})
+      {
+          $OpenCA::DBI::SQL->{TABLE}->{$table} =
+              $tableprefix.$OpenCA::DBI::SQL->{TABLE}->{$table};
+      }
+  }
 
   # Check for all neccessary variables to initialize OpenCA:DBI 
-  print "    checking the configuration for enough data<br>\n" if ($self->{DEBUG});
 
-  # backend is not required actually
-  # if ( not $self->{backend} ) {
-  #   $self->errno ( $OpenCA::DBI::ERROR->{ MISSING_BACKEND } );
-  #   return undef;
-  # }
-  if (
-       (not $self->{DB_Type}) or
-       (not $self->{DB_Name}) or
-       (not $self->{DB_User}) or
-       (not $self->{DB_Passwd})
-     ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_PRIMARY_DATABASE} );
+  $self->debug ("new: checking the configuration for enough data");
+
+  if ( not $self->{gettext} ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{MISSING_GETTEXT} );
     return undef;
+  }
+
+  return $self->set_error ($OpenCA::DBI::ERROR->{MISSING_DATABASE_TYPE})
+      if (not $self->{DB_Type});
+  return $self->set_error ($OpenCA::DBI::ERROR->{MISSING_DATABASE_USER})
+      if (not $self->{DB_User});
+
+  # 2004-10-27 Martin Bartosch <m.bartosch@cynops.de>
+  # added special handling for Oracle external authentication
+  if ($self->{DB_Type} ne 'Oracle') {
+      return $self->set_error ($OpenCA::DBI::ERROR->{MISSING_DATABASE_NAME})
+	  if (not $self->{DB_Name});
+      return $self->set_error ($OpenCA::DBI::ERROR->{MISSING_DATABASE_PASSWD})
+	  if (not $self->{DB_Passwd});
+  } else {
+      # Oracle does not require a database name if the ORACLE_SID is specified
+      # in the environment. 
+      # If external authentication is used with Oracle then DB_Name MUST 
+      # be empty and ORACLE_SID MUST be set (see DBD::Oracle).
+      return $self->set_error ($OpenCA::DBI::ERROR->{MISSING_DATABASE_NAME})
+	  unless (($self->{DB_Name} ne '') or ($ENV{ORACLE_SID} ne ''));
+
+      # Oracle allows 'external authentication'. In this case the username
+      # is set to '/' and the password is empty.
+      return $self->set_error ($OpenCA::DBI::ERROR->{MISSING_DATABASE_PASSWD})
+	  unless (($self->{DB_Passwd} ne '') or ($self->{DB_User} eq '/'));
   }
 
   # The availability of the databases is checked during the operations
@@ -647,89 +841,99 @@ sub new {
 
   ## preparing now the database-strings
   ## this is very database dependent
-  print "    preparing the database (vendor dependent)<br>\n" 
-    if ($self->{DEBUG});
+  $self->debug ("new: preparing the database (vendor dependent)");
 
-  ## WARNING I don't include any attributes into the DSN
-  ## because I don't know how widely version 1.10 of DBI is used actually
+  ## WARNING I do not include any attributes into the DSN
+  ## because I do not know how widely version 1.10 of DBI is used actually
   ## END of WARNING
 
   $self->{DSN} = "dbi:".$self->{DB_Type}.":";
   if ($self->{DB_Type} eq "Pg") {
-    print "      Pg detected<br>\n" if ($self->{DEBUG});
+    $self->debug ("new: Pg detected");
     $self->{DSN} .= "dbname=".$self->{DB_Name};
     $self->{DSN} .= ";"."host=".$self->{DB_Host} if ($self->{DB_Host});
     $self->{DSN} .= ";"."port=".$self->{DB_Port} if ($self->{DB_Port});
   } elsif ($self->{DB_Type} eq "mysql") {
-    print "      mysql detected<br>\n" if ($self->{DEBUG});
+    $self->debug ("new: mysql detected");
     $self->{DSN} .= "database=".$self->{DB_Name};
     $self->{DSN} .= ";"."host=".$self->{DB_Host} if ($self->{DB_Host});
     $self->{DSN} .= ";"."port=".$self->{DB_Port} if ($self->{DB_Port});
     ## not clean but safe
     $self->{DSN} .= ";mysql_ssl=0";
   } elsif ($self->{DB_Type} =~ /^DB2$/ ) {
-    print "      DB2 detected<br>\n" if ($self->{DEBUG});
+    $self->debug ("new: DB2 detected");
     $self->{DSN} .= $self->{DB_Name};
   } elsif ($self->{DB_Type} =~ /^Oracle$/ ) {
-    print "      Oracle detected<br>\n" if ($self->{DEBUG});
+    $self->debug ("new: Oracle detected");
     ## you can use tnsname or sidname
     $self->{DSN} .= $self->{DB_Name};
   } else {
-   $self->errno ( $OpenCA::DBI::ERROR->{DB_TYPE_UNKNOWN} );
+   $self->set_error ( $OpenCA::DBI::ERROR->{DB_TYPE_UNKNOWN} );
    return undef;
   }
-  print "      DB: ".$self->{DSN}."<br>\n" if ($self->{DEBUG});
+  $self->debug ("new: DB: ".$self->{DSN});
 
   ##################################
   ## end of vendor dependent part ##
   ##################################
 
+  $self->debug ("new: OpenCA::DBI should now complete");
 
-  # the following part is only for future use
-  # I plan to develop a synclayer to support offline
-  # certificate revocation etc.
-
-  # initialization of databaseaccess
-  # this is done by a matrix
-
-  # during this process I ever test with local as true result
-  # this prevent us to store data in a local misconfigured 
-  # database if there was a mistake during writing the
-  # configurationfile, e.g. ulttra-secure never should cause 
-  # any local action !!! 
-
-  print "  connecting to database<br>\n" if ($self->{DEBUG});
-
-  $self->{STH} = [];
-
-  ## dsn etc. defined so lets try
-  print "  try to connect<br>\n" if ($self->{DEBUG});
-  $self->{DBH} = DBI->connect ($self->{DSN},
-                               $self->{DB_User},
-                               $self->{DB_Passwd}, 
-                               \%{$OpenCA::DBI::DB->{$self->{DB_Type}}->{DBI_OPTION}});
-  if (not $self->{DBH} or $self->{DBH}->state != 0) {
-    ## connect failed try again
-    print "  connect failed<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{CONNECT_FAILED} );
-    return undef;
-  }
-
-  print "  Checking AutoCommit to be off ...<br>\n" if ($self->{DEBUG});
-  if ($self->{DBH}->{AutoCommit} == 1) {
-    print "  AutoCommit is on so I'm aborting ...<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{AUTOCOMMIT} );
-    return undef;
-  }
-  print "  AutoCommit is off<br>\n" if ($self->{DEBUG});
-
-  print "  OpenCA::DBI should now complete<br>\n" if ($self->{DEBUG});
-
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} ); 
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} ); 
   return $self;
   
 }
 
+sub connect {
+  my $self = shift;
+
+  $self->debug ("connect: connecting to database");
+
+  $self->{STH} = undef;
+
+  ## dsn etc. defined so lets try
+  $self->debug ("connect: try to connect");
+  $self->{DBH} = DBI->connect_cached ($self->{DSN},
+                               $self->{DB_User},
+                               $self->{DB_Passwd}, 
+                               \%{$OpenCA::DBI::DB->{$self->{DB_Type}}->{DBI_OPTION}});
+  if (not $self->{DBH}) {
+    ## connect failed try again
+    $self->debug ("connect: connect failed");
+    $self->set_error ( $DBI::err, $DBI::errstr);
+    $self->set_error ( $OpenCA::DBI::ERROR->{CONNECT_FAILED} );
+    return undef;
+  }
+
+  $self->debug ("connect: Checking AutoCommit to be off ...");
+  if ($self->{DBH}->{AutoCommit} == 1) {
+    $self->debug ("connect: AutoCommit is on so I'm aborting ...");
+    $self->set_error ( $OpenCA::DBI::ERROR->{AUTOCOMMIT} );
+    return undef;
+  }
+  $self->debug ("connect: AutoCommit is off");
+
+  my $charset = setlocale (LC_MESSAGES);
+  if ($charset =~ /[^\.]+\.[^\.]+/)
+  {
+    ## encoding is set
+    if( ($self->{DB_Type} =~ /mysql/i ) and ($charset =~ /utf-8/i ) ) {
+	    $charset = 'utf8';
+    }
+
+    $self->debug ("connect: Setting characterset if the database support it ...");
+    $charset =~ s/^[^\.]+\.//g;
+    $self->doQuery (QUERY => "SET NAMES '$charset'");
+    $self->debug ("connect: Characterset fixed if possible");
+  }
+
+  if ( $self->{DB_Type} =~ /Pg/i ) {
+	## We Set the option for Pg Database
+	$self->{DBH}->{pg_enable_utf8} = 'true';
+  }
+
+  return 1;
+}
 
 #############################
 ## database initialization ##
@@ -742,65 +946,81 @@ sub initDB {
   my $self = shift;
   my $keys = { @_ };
   
-  print "  Entering Loop for different databases<br>\n" if ($self->{DEBUG});
- 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my $mode   = $keys->{MODE};
 
-  if ($self->{DEBUG}) {
-    print "Entering sub initDB\n";
-    print "  MODE: ".$mode."<br>\n";
-  }
+  $self->debug ("initDB: Entering sub initDB");
+  $self->debug ("initDB: MODE: $mode");
 
   ## Accepted modes are
   ## NONE
-  ## FORCE  to force table creation
+  ## FORCE    to force table creation
+  ## DRYRUN   to get SQL commands
 
   my ($db, $force, $table, $dsn); 
   # force ?
   $force = 0;
   if ( $mode =~ /^FORCE$/i ) {
       $force = 1;
+  } elsif ( $mode eq "DRYRUN") {
+      $self->{SQL_SCRIPT} = "";
   }
-  print "    force: ".$force."<br>\n" if ($self->{DEBUG});
-  if ($self->{DEBUG} and $force) {
-    print "    ###############################<br>\n";
-    print "    ## WARNING - FORCEMODE IS ON ##<br>\n";
-    print "    ##   DESTRUCTING ALL TABLES  ##<br>\n";
-    print "    ###############################<br>\n";
-  }
+  $self->debug ("initDB: force: $force");
     
+  ## For Postgres, we generate a new SCHEMA, to be used with namespace
+  ## option (to distinguish between openca's user and pg's user tables)
+  if ( $self->{DB_Type} =~ /Pg/i ) {
+   	my $query = undef;
+
+	if ( $self->{DB_Namespace} eq "" ) {
+		generalError( "Please use option <b>namespace</b> in ".
+			"PREFIX/etc/openca/config.xml (required for " .
+			"DB Type (" . $self->{DB_Type} . ")" );
+	}
+
+	$query = qq{CREATE SCHEMA } . $self->{DB_Namespace};
+	if ( not defined $self->doQuery ( QUERY => $query,
+                                       BIND_VALUES => undef ) ) {
+               	$self->debug_err("upgradeDB: doQuery fail ($query)");
+       	};
+  }
+
   foreach $table (keys %{$OpenCA::DBI::SQL->{TABLE}}) {
-    print "    table: ".$table."<br>\n" if ($self->{DEBUG});
+    $self->debug ("initDB: table: $table");
     # check for existence
-    print "      dsn: ".$self->{DSN}."\n" if ($self->{DEBUG});
-    print "      the folloing debugging-output is for DB2<br>\n" if ($self->{DEBUG});
-    print "      ld_library_path: ".$ENV{LD_LIBRARY_PATH}."<br>\n" if ($self->{DEBUG});
-    print "      path: ".           $ENV{PATH}.           "<br>\n" if ($self->{DEBUG});
-    print "      libpath".          $ENV{LIBPATH}.        "<br>\n" if ($self->{DEBUG});
-    print "      classpath".        $ENV{CLASSPATH}.      "<br>\n" if ($self->{DEBUG});
-    if (defined $self->operateTable (DO=>"exist", TABLE => $table)) {
-      if ($force) {
-        if (not defined $self->operateTable (DO=>"drop", TABLE => $table)) {
-          $self->errno ( $OpenCA::DBI::ERROR->{ "CANNOT_REMOVE_".$table } );
+    $self->debug ("initDB: dsn: ".$self->{DSN});
+    $self->debug ("initDB: the folloing debugging-output is for DB2");
+    $self->debug ("initDB: ld_library_path: ".$ENV{LD_LIBRARY_PATH});
+    $self->debug ("initDB: path: ".           $ENV{PATH});
+    $self->debug ("initDB: libpath".          $ENV{LIBPATH});
+    $self->debug ("initDB: classpath".        $ENV{CLASSPATH});
+    $self->debug ("initDB: oracle_home".      $ENV{ORACLE_HOME});
+
+    if (defined $self->operateTable (DO=>"exist", TABLE => $table, 
+							MODE => $mode )) {
+      if ($force or $mode eq "DRYRUN") {
+        if (not defined $self->operateTable (DO=>"drop", TABLE => $table, 
+							MODE => $mode)) {
+          $self->set_error ( $OpenCA::DBI::ERROR->{ "CANNOT_REMOVE_".$table } );
           $self->rollback ();
 	  return undef;
 	}
+
       } else {
-        $self->errno ( $OpenCA::DBI::ERROR->{ $table."_TABLE_EXIST" } );
+        $self->set_error ( $OpenCA::DBI::ERROR->{ $table."_TABLE_EXIST" } );
         $self->rollback ();
         return undef;
       }
     }
-    print "      try to create table<br>\n" if ($self->{DEBUG});
+    $self->debug ("initDB: try to create table");
     # create table
-    if (not defined $self->operateTable (DO=>"create", TABLE => $table)) {
-      $self->errno ( $OpenCA::DBI::ERROR->{ "CANNOT_CREATE_".$table } );
+    if (not defined $self->operateTable (DO=>"create", TABLE => $table, MODE => $mode)) {
+      $self->set_error ( $OpenCA::DBI::ERROR->{ "CANNOT_CREATE_".$table } );
       $self->rollback ();
       return undef;
     }
-    print "      table created<br>\n" if ($self->{DEBUG});
+    $self->debug ("initDB: table created");
   }
 
   if (not defined $self->commit ()) {
@@ -808,8 +1028,9 @@ sub initDB {
     return undef;
   }
 
-  print "  initDB successful completed<br>\n" if ($self->{DEBUG});
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->debug ("initDB: initDB successful completed");
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  return $self->{SQL_SCRIPT} if ($mode eq "DRYRUN");
   return 1;
 }
 
@@ -817,24 +1038,25 @@ sub operateTable {
   my $self = shift;
   my $keys = { @_ };
   
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my $table     = $keys->{TABLE};
   my $operation = $keys->{DO};
  
-  print "Entering sub operateTable<br>\n" if ($self->{DEBUG});
+  $self->debug ("operateTable: Entering sub operateTable");
  
   # the tables
-  my (%tables, $dbh, $sth, $statement, $create);
+  my (%tables, $dbh, $statement, $create);
 
-  print "        build the create statements<br>\n" if ($self->{DEBUG});
+  $self->debug ("operateTable: build the create statements");
 
   ############################
   ## initial tablestructure ##
   ## change carefully !!!   ##
   ############################
 
-  print "  table: ".$OpenCA::DBI::SQL->{TABLE}->{$table}."<br>\n" if ($self->{DEBUG});
+  $self->debug_err ("operateTable: table: ($table)".
+				$OpenCA::DBI::SQL->{TABLE}->{$table});
   $create = "create table ".$OpenCA::DBI::SQL->{TABLE}->{$table}." (";
   for (my $i=0; 
        $i < scalar (@{$OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$table}}); 
@@ -847,8 +1069,11 @@ sub operateTable {
                    $OpenCA::DBI::SQL->{VARIABLE}->{
                      $OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$table}[0]
                    }[1]
-                 }." ".
-                 $OpenCA::DBI::DB->{$self->{DB_Type}}->{TYPE}->{PRIMARYKEY};
+                 };
+	if ( $table =~ /CA_CERTIFICATE|CERTIFICATE|CRL|CRR|REQUEST|USER/ ) {
+		$create .= " " . 
+		   $OpenCA::DBI::DB->{$self->{DB_Type}}->{TYPE}->{PRIMARYKEY};
+	};
     } else {
       $create .= ", ".
                  $OpenCA::DBI::SQL->{VARIABLE}->{
@@ -865,7 +1090,7 @@ sub operateTable {
   $create .= " ".$OpenCA::DBI::DB->{$self->{DB_Type}}->{CREATE_TABLE_OPTION}
     if (exists $OpenCA::DBI::DB->{$self->{DB_Type}}->{CREATE_TABLE_OPTION});
 
-  print "  create:".$create."<br>\n" if ($self->{DEBUG});
+  $self->debug ("operateTable: create: $create");
 
   ############################
   ##      end of            ##
@@ -873,7 +1098,7 @@ sub operateTable {
   ## change carefully !!!   ##
   ############################
 
-  print "        build the statement finally<br>\n" if ($self->{DEBUG});
+  $self->debug ("operateTable: build the statement finally");
 
   # check table
   my $negator = 0;
@@ -885,50 +1110,360 @@ sub operateTable {
     $statement = "select * from ".$OpenCA::DBI::SQL->{TABLE}->{$table};
   }
 
-  print "        statement: ".$statement."<br>\n" if ($self->{DEBUG});
+  $self->debug_err ("operateTable: statement: $statement");
   ## can happen if operation performs for sequence generator
   if ($statement eq "") {
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
     return 1;
   }
-  print "        run the statement<br>\n" if ($self->{DEBUG});
+  $self->debug ("operateTable: run the statement");
 
-  # attention not for final use because of the central $OpenCA::DBI::ERROR VARIABLE !!!
+  # attention not for final use because of the central 
+  # $OpenCA::DBI::ERROR VARIABLE !!!
 
   # because of a postgres-bug we must commit all changes here
   if ($self->{DB_Type} =~ /Pg/i) {
       $self->commit();
   }
-  if (not defined $self->doQuery ( QUERY => $statement )) {
-    print "        query failed return undef (EXCEPT OF NEGATOR)<br>\n" if ($self->{DEBUG});
-    # because of a postgres-bug we must rollback here to rescue the following operations
-    if ($self->{DB_Type} =~ /Pg/i) {
-        $self->rollback();
+  if ($keys->{MODE} eq "DRYRUN") {
+    	$self->{SQL_SCRIPT} .= $statement.";";
+  } else {
+	my $ret = $self->doQuery ( QUERY => $statement );
+	if ( not defined $ret ) {
+		$self->debug ("operateTable: query failed return " .
+				"undef (EXCEPT OF NEGATOR)");
+
+		# because of a postgres-bug we must rollback here to 
+		# rescue the following operations
+      	if ($self->{DB_Type} =~ /Pg/i) {
+          	$self->rollback();
+      	}
+
+      	if ($negator) {
+        	$self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+        	return 1;
+      	}
+      	return undef;
     }
-    if ($negator) {
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-      return 1;
-    }
-    return undef;
   }
 
-  print "        query succeeded return 1 (EXCEPT OF NEGATOR)<br>\n" if ($self->{DEBUG});
+  $self->debug ("operateTable: query succeeded return 1 (EXCEPT OF NEGATOR)");
   return undef if ($negator);
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return 1;
   
 }
 
-####################################
-## end of database initialization ##
-####################################
+## ##################################################################
+## Function Name: upgradeDB
+## ##################################################################
 
-#################################
-## storeItem related functions ##
-#################################
+sub upgradeDB {
 
-## arguments miust be ransmitted via $arguments->{...}
+	my $self = shift;
+	my $query = "";
+	my $keys = { @_ };
+
+	my @bind_values = ();
+	my @my_tables = ();
+
+	my $mode = "FORCE";
+
+    	if ( $self->{DB_Type} =~ /Pg/i ) {
+	   	my $query = undef;
+
+		if ( $self->{DB_Namespace} eq "" ) {
+			generalError( "Please use option <b>namespace</b> in ".
+				"PREFIX/etc/openca/config.xml (required for " .
+				"DB Type (" . $self->{DB_Type} . ")" );
+		}
+
+		$query = qq{CREATE SCHEMA } . $self->{DB_Namespace};
+		if ( not defined $self->doQuery ( QUERY => $query,
+                                        BIND_VALUES => undef ) ) {
+                	$self->debug_err("upgradeDB: doQuery fail ($query)");
+			$self->rollback();
+        	} else {
+			$self->commit();
+		}
+	}
+
+	$query = "alter table certificate alter column " .
+		$OpenCA::DBI::SQL->{VARIABLE}->{
+                   $OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{CERTIFICATE}[0]
+                 }[0]." ".
+                 $OpenCA::DBI::DB->{$self->{DB_Type}}->{TYPE}->{
+                   $OpenCA::DBI::SQL->{VARIABLE}->{
+                     $OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{CERTIFICATE}[0]}
+			[1]};
+
+
+	if ( not defined $self->doQuery ( QUERY => $query,
+                                        BIND_VALUES => \@bind_values) ) {
+                $self->debug_err("upgradeDB: doQuery failure detected 2");
+		$self->rollback();
+        } else {
+		$self->commit();
+	}
+
+    ## Create the new tables
+    @my_tables = ( "USER", "USER_DATA", "MESSAGES" );
+    foreach my $table ( @my_tables ) {
+    	if (defined $self->operateTable (DO=>"exist", TABLE => $table, 
+							MODE => $mode)) {
+		$self->debug_err ("upgradeDB::Table $table exists, skipping.");
+		next;
+	};
+
+    	if (not defined $self->operateTable (DO=>"create", TABLE => $table )) {
+		$self->debug_err ("upgradeDB::ERROR creating TABLE $table.");
+		$self->rollback();
+    	}
+
+  	if (not defined $self->commit ()) {
+		$self->debug_err ("upgradeDB::Commit failed for $table");
+	}
+    }
+
+    foreach my $table ( keys %{$OpenCA::DBI::SQL->{FOREIGN_KEYS}} ) {
+
+	## Now add the Foreign Keys
+	if ( defined $OpenCA::DBI::SQL->{FOREIGN_KEYS}->{$table} ) {
+		my ( $col, $target_col, $target_table );
+		my ( %refs );
+		my ( $query, $myTable );
+
+		$self->debug_err ( "foreignKey:: Keys to be added for $table");
+
+		%refs = %{$OpenCA::DBI::SQL->{FOREIGN_KEYS}->{$table}};
+
+		foreach my $k ( keys %refs ) {
+
+			$self->debug_err ( "foreignKey:: K2=> $k [" . 
+				$refs{$k}->[0] .  " - " . $refs{$k}->[1]);
+
+			$query = $OpenCA::DBI::DB->{
+				$self->{DB_Type}}->{FOREIGN_KEY};
+
+			$col = $OpenCA::DBI::SQL->{VARIABLE}->{$k}[0];
+
+			$myTable =
+				$OpenCA::DBI::SQL->{TABLE}->{$table};
+
+			$target_table =
+				$OpenCA::DBI::SQL->{TABLE}->{$refs{$k}->[0]};
+
+			$target_col =
+				$OpenCA::DBI::SQL->{VARIABLE}->{$refs{$k}->[1]}[0];
+
+			$query =~ s/__COL__/$col/g;
+			$query =~ s/__TABLE__/$myTable/g;
+			$query =~ s/__TARGET_COL__/$target_col/g;
+			$query =~ s/__TARGET_TABLE__/$target_table/g;
+
+			$self->debug_err( "foreignKey::query => $query" );
+			$self->debug_err( "foreignKey::col => $col" );
+			$self->debug_err( "foreignKey::target_table => $target_table" );
+			$self->debug_err( "foreignKey::target_col => $target_col" );
+		    	if ( not defined $self->doQuery ( QUERY => $query,
+                                        BIND_VALUES => \@bind_values) ) {
+                    	   $self->debug_err("upgradeDB: doQuery fail ($query)");
+			   $self->rollback();
+        	    	} else {
+				$self->commit();
+			}
+		}
+	} else {
+		$self->debug_err ( "foreignKey:: NO FKeys for $table");
+	}
+    }
+
+	my $update_cols = {
+		CERTIFICATE => [ "ROWID", "NOTBEFORE", "SUSPENDED_AFTER","REVOKED_AFTER",
+				 "INVALIDITY_REASON", "OWNER" ],
+		CA_CERTIFICATE => [ "ROWID", "NOTBEFORE", "SUSPENDED_AFTER",
+				    "REVOKED_AFTER", "INVALIDITY_DATE" ],
+		REQUEST => [ "ROWID", "NOTBEFORE", "NOTAFTER", "APPROVED_AFTER",
+			     "DELETED_AFTER", "ARCHIVED_AFTER", "OWNER",
+			     "CA_CERTIFICATE_SERIAL" ],
+		CRR => [ "ROWID", "NOTBEFORE", "NOTAFTER", "APPROVED_AFTER", 
+			 "DELETED_AFTER", "ARCHIVED_AFTER", "OWNER" ],
+		CRL => [ "ROWID" ],
+		USER => [ "ROWID" ],
+		USER_DATA => [ "ROWID" ],
+		MESSAGES => ["ROWID"],
+	};
+
+	foreach my $table ( keys %$update_cols ) {
+		my ( $myTable, $myCol, $def, $query );
+
+		$myTable = $OpenCA::DBI::SQL->{TABLE}->{$table};
+		foreach my $col ( @{$update_cols->{$table}} ) {
+			$self->debug_err ( "updateDB: col update $table($col)");
+
+			$myCol = $OpenCA::DBI::SQL->{VARIABLE}->{$col}[0];
+
+			$def = $OpenCA::DBI::DB->{$self->{DB_Type}}->{TYPE}->{
+                		$OpenCA::DBI::SQL->{VARIABLE}->{$col}[1]};
+
+			$query = "alter table $myTable add column $myCol $def";
+			$self->debug_err ( "updateDB: query $query");
+
+		    	if ( not defined $self->doQuery ( QUERY => $query,
+                                        BIND_VALUES => undef ) ) {
+                    	   $self->debug_err("upgradeDB: doQuery fail ($query)");
+			   $self->rollback();
+        	    	} else {
+				$self->commit();
+			}
+		}
+
+		if ( $self->{DB_Type} =~ /MySQL/i ) {
+			$query = "alter table $myTable ENGINE=InnoDB";
+
+		    	if ( not defined $self->doQuery ( QUERY => $query,
+                                        BIND_VALUES => undef ) ) {
+                    	   $self->debug_err("upgradeDB: doQuery fail ($query)");
+        	    	};
+		}
+	}
+
+	## Fix for the Postgres_DB --- the DB is correct, but since we might
+	## have empty owners, we need to DROP the NOT NULL constraint
+    	if ( $self->{DB_Type} =~ /Pg/i ) {
+	   	my $query = undef;
+
+    		my @my_tables = ( "CERTIFICATE", "REQUEST", "CRR" );
+    		foreach my $table ( @my_tables ) {
+
+	   		$query = qq{ALTER TABLE } . 
+				$OpenCA::DBI::SQL->{TABLE}->{$table} .
+				qq{ ALTER COLUMN } .
+				$OpenCA::DBI::SQL->{VARIABLE}->{OWNER}[0] .
+				qq{ DROP NOT NULL};
+
+		    	if ( not defined $self->doQuery ( QUERY => $query,
+                                        BIND_VALUES => undef ) ) {
+                    	   $self->debug_err("upgradeDB: doQuery fail ($query)");
+			   $self->rollback();
+        	    	} else {
+				$self->commit();
+			}
+    		}
+    	}
+
+	## Now we need to update the (CA_)CERTIFICATE TABLES
+	my @kList = $self->searchItems( DATATYPE=>"CA_CERTIFICATE", 
+							MODE=>"KEYLIST" );
+	foreach my $k ( @kList ) {
+		my $cert = undef;
+
+		$cert = $self->getItem ( DATATYPE=>"CA_CERTIFICATE", KEY=>"$k");
+		next if ( not $cert );
+
+		$self->debug_err ( "updating Certs: $k [" . 
+					$cert->getParsed()->{CN} . "]" );
+
+		$self->updateKey ( DATATYPE => "CA_CERTIFICATE", 
+				KEY=>"$k",
+				NEWKEY => $cert->getSerial("CA_CERTIFICATE") );
+	}
+
+	@kList = $self->searchItems( DATATYPE=>"CERTIFICATE", 
+							MODE=>"KEYLIST" );
+	foreach my $k ( @kList ) {
+		my $cert = undef;
+
+		$cert = $self->getItem ( DATATYPE=>"CERTIFICATE", KEY=>"$k");
+		next if ( not $cert );
+
+		$self->debug_err ( "updating Certs: $k [" . 
+					$cert->getParsed()->{CN} . "]" );
+
+		$self->updateItem ( DATATYPE=>"CERTIFICATE", KEY=>"$k",
+				OBJECT => $cert );
+	}
+
+	@kList = $self->searchItems( DATATYPE=>"CRL", MODE=>"KEYLIST" );
+	foreach my $k ( @kList ) {
+		my $crl = undef;
+
+		$crl = $self->getItem ( DATATYPE=>"CRL", KEY=>"$k");
+		next if ( not $crl );
+
+		$self->debug_err ( "updating CRL: $k [" . 
+					$crl->getParsed()->{ISSUER} . "]" );
+
+		$self->updateItem ( DATATYPE=>"CRL", KEY=>"$k",
+				OBJECT => $crl );
+	}
+
+	return 1;
+}
+
+#####################################################################
+#################### END of database initialization #################
+#####################################################################
+
+#####################################################################
+## ----------------- storeItem related functions ----------------- ##
+#####################################################################
+
+## ##################################################################
+## Function Name: updateItem
+## ##################################################################
+
+sub updateItem {
+
+  my $self = shift;
+  my $keys = { @_ };
+  my $status = undef;
+
+  if ( not defined $keys->{OBJECT} ) {
+	$errval = $self->{gettext} ("Required Parameter OBJECT is missing.");
+	return undef;
+  }
+
+  return $self->storeItem ( MODE=>"UPDATE", @_ );
+}
+
+sub updateKey {
+
+   my $self = shift;
+   my $keys = { @_ };
+   my $status = undef;
+   my @bind_values = ();
+
+   if ( not defined $keys->{KEY} or not defined $keys->{NEWKEY} ) {
+	$errval = $self->{gettext} ("Required Parameter is missing.");
+	return undef;
+   }
+
+  my $table = $self->getTable ($keys->{DATATYPE});
+
+  my $query = "update ". $OpenCA::DBI::SQL->{TABLE}->{$table} .  " set " . 
+     $OpenCA::DBI::SQL->{VARIABLE}->{$table."_SERIAL"}[0]."=? ".
+	" where ".  $OpenCA::DBI::SQL->{VARIABLE}->{$table."_SERIAL"}[0]."=?";
+
+  push( @bind_values, $keys->{NEWKEY});
+  push( @bind_values, $keys->{KEY});
+
+  if ( not defined $self->doQuery ( QUERY => $query,
+                                BIND_VALUES => \@bind_values) ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{UPDATE_FAILED} );
+    return undef;
+  }
+
+  return $keys->{NEWKEY};
+
+}
+## ##################################################################
+## Function Name: storeItem
+## ##################################################################
+
 sub storeItem {
+
+  ## arguments miust be ransmitted via $arguments->{...}
 
   ## Store a provided Item (DATA) provided the exact
   ## DATATYPE. KEY (position in dB) data to match will
@@ -940,14 +1475,28 @@ sub storeItem {
   my $self = shift;
   my $keys = { @_ };
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+   $self->debug_err (">>>>>>>>>> updateItem: datatype => " .
+ 				$keys->{DATATYPE} . " / " .
+ 				$keys->{OBJECT}->{DATATYPE} );
+ 
+   if ($keys->{DATATYPE} =~ /CERTIFICATE|REQUEST|CRR/ ) {
+	my $status = undef;
 
-  print "### new function call ###<br>\n".
-        "Entering function storeItem<br>\n" if ($self->{DEBUG});
+	$status = $self->getStatus ( DATATYPE => $keys->{DATATYPE} );
+  	$keys->{OBJECT}->setStatus( $status )
+   }
+
+  $self->debug_err (">>>>>>>>>> updateItem: datatype => " .
+				$keys->{DATATYPE} . " / " .
+				$keys->{OBJECT}->{DATATYPE} );
+
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+
+  $self->debug ("storeItem: Entering function storeItem");
  
   my %arguments  = $self->storeItem_getArguments ( @_ );
   ## check for a correct run of storeItem_getArguments
-  print "  storeItem: table: ".$arguments {TABLE}."<br>\n" if ($self->{DEBUG});      
+  $self->debug ("storeItem: table: ".$arguments {TABLE});      
 
   ## errno set by function
   return undef if (not defined $self->storeItem_checkData ( \%arguments ) );
@@ -968,35 +1517,46 @@ sub storeItem {
   ###########################################
   ## be warned: a serial can be a zero !!! ##
   ###########################################
-  print "  storeItem: succeeded - KEY: ".$arguments {KEY}."<br>\n" if ($self->{DEBUG});  
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->debug ("storeItem: succeeded - KEY: ".$arguments {KEY});  
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return $arguments {KEY};
     
 }
 
-## parse the arguments
+## ##################################################################
+## Function Name: storeItem_getArguments
+## ##################################################################
+
 sub storeItem_getArguments {
+
+  ## parse the arguments
 
   my $self = shift;
   my $keys = { @_ };
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my %result;
 
-  print "### new function call ###<br>\n".
-        "Entering storeItem_getArguments<br>\n" if ($self->{DEBUG});
+  $self->debug ("storeItem_getArguments: Entering storeItem_getArguments");
 
   $result{MODE}       = $keys->{MODE};
   $result{MODULETYPE} = $keys->{MODULETYPE};
   $result{MODULE}     = $keys->{MODULE};
   $result{object}     = $keys->{OBJECT};
 
+  return undef if ( not defined $keys->{OBJECT} );
+
+  if ( not defined $keys->{DATATYPE} ) {
+	$keys->{DATATYPE} = $keys->{OBJECT}->{DATATYPE};
+  }
+
   $result {TABLE} = $self->getTable ($keys->{DATATYPE});
-  print "  storeItem_getArguments: table: ".$result {TABLE}."<br>\n" if ($self->{DEBUG});
+  $self->debug ("storeItem_getArguments: table: ".$result {TABLE});
 
   ## get all searchable attributes
-  @{$result {attributes}} = $self->getSearchAttributes( DATATYPE=>$result {TABLE} );
+  @{$result {attributes}} = 
+  	$self->getSearchAttributes( DATATYPE=>$result {TABLE} );
   
   my $attr;
 
@@ -1005,101 +1565,178 @@ sub storeItem_getArguments {
   ## storeItem
 
   for $attr ( @{$result {attributes}} ) {
- 
-    print "  storeItem_getArguments: attribute: ".$attr."<br>\n" if ($self->{DEBUG});      
-    ##     Here we distinguish between parameteres in the header
-    if( $attr =~ /^(LOA|RA|ROLE|CSR_SERIAL|OPERATOR|SCEP_TID)$/i ) {
-      if ( defined $object->getParsed()->{HEADER}->{$attr} ) {
-        $result {$attr} = $object->getParsed()->{HEADER}->{$attr};
-        print "  storeItem_getArguments: value: ".$result {$attr}."<br>\n" if ($self->{DEBUG});      
-      }
-    } elsif( $attr =~ /^(DN|PUBKEY|REVOKE_CERTIFICATE_DN|REVOKE_CERTIFICATE_SERIAL|REASON|SUBMIT_DATE|LAST_UPDATE|NEXT_UPDATE)$/i ) {
-      if ( defined $object->getParsed()->{$attr} ) {
-        $result {$attr} = $object->getParsed()->{$attr};
-        print "  storeItem_getArguments: value: ".$result {$attr}."<br>\n" if ($self->{DEBUG});      
-      }
-    } elsif( $attr =~ /^(EMAIL)$/i ) {
-      if ( defined $object->getParsed()->{EMAILADDRESS} ) {
-        $result {EMAILADDRESS} = $object->getParsed()->{EMAILADDRESS};
-        $result {EMAIL} = $object->getParsed()->{EMAILADDRESS};
-        print "  storeItem_getArguments: value: ".$result {EMAILADDRESS}."<br>\n" if ($self->{DEBUG});      
-      }
+    my $value = undef; 
+
+    $self->debug_err ( "storeItem_getArguments: $attr" );
+
+    # We deal with email separately
+    next if ( $attr =~ /^EMAIL$/ );
+
+    my %k = %{ $keys };
+
+    $value = undef;
+    if ( exists $k{$attr} ) {
+	$value = $k{$attr};
     } else {
-      if ( defined $object->getParsed()->{DN_HASH}->{$attr} ) {
-        $result {$attr} = $object->getParsed()->{DN_HASH}->{$attr}[0];
-        print "  storeItem_getArguments: value: ".$result {$attr}."<br>\n" if ($self->{DEBUG});      
-      }
-    }
+    	if ( defined $object->getParsed()->{HEADER}->{$attr} ) {
+		$self->debug_err ("storeItem_getArguments: $attr in " .
+			"HEADER [".$object->getParsed()->{HEADER}->{$attr}."]");
+		$value = $object->getParsed()->{HEADER}->{$attr};
+    	} elsif ( defined $object->getParsed()->{$attr} ) {
+		$self->debug_err("storeItem_getArguments: $attr in BODY [".
+			$object->getParsed()->{$attr} . "]" );
+		$value = $object->getParsed()->{$attr};
+    	} elsif ( defined $object->getParsed()->{DN_HASH}->{$attr} ) {
+		$self->debug_err ("storeItem_getArguments: $attr in DN_HASH [".
+			$object->getParsed()->{DN_HASH}->{$attr}[0] . "]" );
+		$value = $object->getParsed()->{DN_HASH}->{$attr}[0];
+    	} elsif ( defined $object->{$attr} ) {
+		$self->debug_err ("storeItem_getArguments: $attr in OBJECT [".
+			$object->{$attr} . "]" );
+		$value = $object->{$attr};
+    	} else {
+		$self->debug_err ("storeItem_getArguments: $attr NOT found!");
+		$value = undef;
+    	}
+    };
+
+    $self->debug_err ( "RESULT { $attr } = $value");
+
+    # if ( utf8::is_utf8($value) ) {
+# 	utf8::upgrade($value);
+ #    };
+
+    $result{$attr} = $value;
   }
 
-  ## if it is a cert then we have to set notafter to handle expired certs
-  $result {NOTAFTER} = $self->{backend}->getNumericDate ($object->getParsed()->{NOTAFTER})
-    if ($object->getParsed()->{NOTAFTER});
+  # Now fix the EMAIL attribute
+  if ( defined $object->getParsed()->{EMAILADDRESSES} ) {
+        $result {EMAILADDRESS} = "";
+        $result {EMAIL} = "";
+        foreach my $email (@{$object->getParsed()->{EMAILADDRESSES}}) {
+            $result {EMAILADDRESS} .= "," if ($result {EMAILADDRESS});
+            $result {EMAILADDRESS} .= $email;
+            $result {EMAIL} .= "," if ($result {EMAIL});
+            $result {EMAIL} .= $email;
+        }
+
+    	# if ( utf8::is_utf8($result{EMAILADDRESS}) ) {
+	# 	print STDERR "VALUE is EMAILADDRESS UTF8 => " .
+	# 			"$result{EMAILADDRESS}\n";
+	# 	# utf8::decode($result{EMAILADDRESS});
+    	# };
+
+    	# if ( utf8::is_utf8($result{EMAIL}) ) {
+	# 	print STDERR "VALUE is EMAIL UTF8 => " . $result{EMAIL} . "\n";
+	# 	# utf8::decode($result{EMAIL});
+    	# };
+  }
 
   ## enforce status
   $result {STATUS} = $self->getStatus ( STATUS   => $result {STATUS},
                                         DATATYPE => $keys->{DATATYPE} );
-  if ($result {STATUS} =~ /EXPIRED/i) {
-    $result {STATUS} = "VALID";
+
+  ## Get the Numeric Version of the current GMT time
+  my $today = gmtime;
+  my $numTodayValue = $self->{backend}->getNumericDate( "$today" );
+  my $tempDate = undef;
+
+  # print STDERR "storeItem_getArgs: RESULT{STATUS}   = " . $result{STATUS} ."\n";
+  # print STDERR "storeItem_getArgs: numTodayValue    = $numTodayValue\n";
+
+  # print STDERR "storeItem_getArgs: RESULT{NOTAFTER} = " .
+		$result{NOTAFTER} . "\n";
+  # print STDERR "storeItem_getArgs: RESULT{NOTBEFORE} = " .
+		$result{NOTAFTER} . "\n";
+
+  if ($result {NOTAFTER} ) {
+	$tempDate = $self->{backend}->getNumericDate ( $result{NOTAFTER} );
+	$result {STATUS} = "EXPIRED" if ( $tempDate < $numTodayValue);
   }
+
+  if ($result {NOTBEFORE} ) {
+	$tempDate = $self->{backend}->getNumericDate ( $result{NOTBEFORE} );
+	$result {STATUS} = "EXPIRED" if ( $tempDate > $numTodayValue);
+  }
+
+  if ($result{NEXT_UPDATE}) {
+	$tempDate = $self->{backend}->getNumericDate ( $result{NEXT_UPDATE} );
+	$result {STATUS} = "EXPIRED" if ( $tempDate < $numTodayValue);
+  }
+
+  if ($result{LAST_UPDATE}) {
+	$tempDate = $self->{backend}->getNumericDate ( $result{LAST_UPDATE} );
+	$result {STATUS} = "EXPIRED" if ($tempDate > $numTodayValue);
+  }
+
+  # print STDERR "storeItem_getArgs: NEW STATUS   = " . $result{STATUS} ."\n";
+
   if (not $result {STATUS}) {
     delete ($result {STATUS});
-    print "  storeItem_getArguments: status: erased because empty<br>\n" if ($self->{DEBUG});
-  } elsif ($self->{DEBUG}) {
-    print "  storeItem_getArguments: status: ".$result {STATUS}."<br>\n";
+    $self->debug ("storeItem_getArguments: status: erased because empty");
+  } else {
+    $self->debug ("storeItem_getArguments: status: ".$result {STATUS});
   }
 
   ## storage formats
-  ##   If the data is convertible, let's have only one internal
+  ##   If the data is convertible, let us have only one internal
   ##   format to handle with
   $result {INFORM} = $keys->{INFORM};
   if ( not $result {INFORM} ) {
     $result {INFORM} = "PEM";
   }
-  print "  storeItem_getArguments: inform: ".$result {INFORM}."<br>\n" if ($self->{DEBUG});
+  $self->debug ("  storeItem_getArguments: inform: ".$result {INFORM});
 
-  $result {KEY} = $result {object}->getSerial ($result {TABLE});
+  $result {KEY} = $object->getSerial ( $keys->{DATATYPE} );
+  $self->debug_err (">>> storeItem::KEY => " . $result{KEY} );
+
+  # $result {KEY} = $object->getParsed()->{HEADER}->{SERIAL};
+  # $self->debug_err (">>> storeItem::KEY [2] => " . $result{KEY} );
+
   $result {CONVERTED} = $object->getItem ();
   if( $result {TABLE} =~ /(REQUEST|CRR)/i ) {
     $result {FORMAT} = $object->getParsed()->{TYPE};
   } else {
     $result {FORMAT} = "PEM";
   }
-  print "  storeItem_getArguments: KEY:".$result{KEY}."<br>\n" if ($self->{DEBUG});
-  print "  storeItem_getArguments: format: ".$result {FORMAT}."<br>\n" if ($self->{DEBUG});
-  print "  storeItem_getArguments: converted: ".$result {CONVERTED}."<br>\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_getArguments: KEY:".$result{KEY});
+  $self->debug ("storeItem_getArguments: format: ".$result {FORMAT});
+  $self->debug ("storeItem_getArguments: converted: ".$result {CONVERTED});  
 
-  if ($self->{DEBUG}) {
-    print "  storeItem_getArguments: object->getParsed hash:<br>\n";
-    for my $h (keys %{$object->getParsed()}) {
-      print "  storeItem_getArguments: object-attribute:".$h."<br>\n";
-      print "  storeItem_getArguments: object-value:".$object->getParsed ()->{$h}."<br>\n";
-    }
+  $self->debug ("storeItem_getArguments: object->getParsed hash:");
+  for my $h (keys %{$object->getParsed()}) {
+      $self->debug ("storeItem_getArguments: object-attribute: $h");
+      $self->debug ("storeItem_getArguments: object-value: ".$object->getParsed ()->{$h});
   }
 
-  print "### function storeItem_getArguments succesfully finished ###<br>\n" if ($self->{DEBUG});
+  $self->debug ("storeItem_getArguments: function succesfully finished");
 
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return %result;
 }
 
-## checks all the available data
-## warning: function must called with storeItem_checkData { \%arguments} !!!
+## ##################################################################
+## Function Name: storeItem_checkData
+## ##################################################################
+
 sub storeItem_checkData {
+
+  ## checks all the available data
+  ## warning: function must called with 
+  #           storeItem_checkData { \%arguments} !!!
 
   my $self = shift;
   my $arguments = $_[0];
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   ## check data
-  print "### new function call ###<br>\n".
-        "Entering storeItem_checkData<br>\n" if ($self->{DEBUG});
+  $self->debug ("storeItem_checkData: Entering storeItem_checkData");
   
   ##   determinate table
   if (not $arguments->{TABLE}) {
     # this is not allowed (for recovery too)
-    $self->errno ($OpenCA::DBI::ERROR->{WRONG_DATATYPE});
+    $self->set_error ($OpenCA::DBI::ERROR->{WRONG_DATATYPE});
     return undef;
   }
   
@@ -1143,70 +1780,82 @@ sub storeItem_checkData {
 
   ##   if we have no object then return
   if (not $arguments->{object}) {
-    $self->errno ($OpenCA::DBI::ERROR->{NO_OBJECT});
+    $self->set_error ($OpenCA::DBI::ERROR->{NO_OBJECT});
     return undef;
   }
 
-  my $query;
-  my @bind_values;
+  my $query = undef;
+  my @bind_values = ();
+  my @bind_types = ();
 
   ## is item existent and unique ?
-  print "  OpenCA::DBI->storeItem_checkData: check for existence of item<br>\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_checkData: check for existence of item");  
   $query = "select * from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments->{TABLE}}." where ". 
            $OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[0]."=?";
   undef @bind_values;
   $bind_values[0] = $arguments->{KEY};
+  $bind_types [0] = $OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[1];
 
-  print "  OpenCA::DBI->storeItem_checkData: doQuery: ".$query."<br>\n" if ($self->{DEBUG});  
-  if ( not defined $self->doQuery ( QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    print "  OpenCA::DBI->storeItem_checkData: doQuery failure detected<br>\n" if ($self->{DEBUG});  
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+  $self->debug_err ("storeItem_checkData: doQuery: $query");  
+  $self->debug_err ("storeItem_checkData: bind_values: @bind_values\n");
+  $self->debug_err ("storeItem_checkData: bind_types: @bind_types\n");
+
+  if ( not defined $self->doQuery ( QUERY => $query, 
+		BIND_VALUES => \@bind_values, BIND_TYPES => \@bind_types) ) {
+    $self->debug_err ("storeItem_checkData: doQuery failure detected");  
+    $self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
     return undef;
   }
  
-  my $rv = $self->{STH}[scalar @{$self->{STH}} -1]->fetchrow_arrayref;
+  my $rv = $self->{STH}->fetchrow_arrayref;
 
   ## normal insertion of object
   if (defined $rv and $rv) {
     if (defined $arguments->{MODE} and ($arguments->{MODE} =~ /INSERT/)) {
-      print "  OpenCA::DBI->storeItem_checkData: illegal insert<br>\n" if ($self->{DEBUG});  
-      $self->errno ( $OpenCA::DBI::ERROR->{ENTRY_EXIST} );
+      $self->debug_err ("storeItem_checkData: illegal insert");  
+      $self->set_error ( $OpenCA::DBI::ERROR->{ENTRY_EXIST} );
       return undef;
     } else {
       $arguments->{MODE} = "UPDATE";
     }
   } else {
+	my @call = caller;
     if (defined $arguments->{MODE} and ($arguments->{MODE} =~ /UPDATE/)) {
-      print "  OpenCA::DBI->storeItem_checkData: illegal update<br>\n" if ($self->{DEBUG});  
-      $self->errno ( $OpenCA::DBI::ERROR->{ENTRY_NOT_EXIST} );
+      $self->debug ("storeItem_checkData: illegal update");  
+      $self->set_error ( $OpenCA::DBI::ERROR->{ENTRY_NOT_EXIST} );
       return undef;
     } else {
       $arguments->{MODE} = "INSERT";
     }
   }
 
-  print "  data is complete<br>\n" if ($self->{DEBUG});  
-  print "### leaving function storeItem_checkData successfully ###<br>\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_checkData: data is complete");  
+  $self->debug ("storeItem_checkData: leaving function successfully");  
 
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return 1;
 }
+
+## ##################################################################
+## Function Name: storeItem_update
+## ##################################################################
 
 sub storeItem_update {
 
   my $self = shift;
   my $arguments = $_[0];
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
-  my $query;
-  my @bind_values;
+  my $query = undef;
+  my @bind_values = ();
+  my @bind_types = ();
 
-  print "    update mode\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_upate: update mode");  
   ## item existent
   ## ok this could be CRR, Request or Certificate
   ##   verify actual state (check signatures)
-  ##     -- (I think that's not the job of the DBI-Module - so it is not implemented)
+  ##     -- (I think that is not the job of the DBI-Module - so it is not implemented)
   ##   check all input data
   ##     -- this should be done earlier 
   ##     -- (attriubtes are checked directly before storing them)
@@ -1214,60 +1863,88 @@ sub storeItem_update {
   ##     -- actually not implemented (do statechange only)
   ##   try statechange
   ##     -- prepare query
-  print "    prepare query\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_update: prepare query");  
   $query = "update ".$OpenCA::DBI::SQL->{TABLE}->{$arguments->{TABLE}}." set ".
-  ##     -- adding data, format, status
-    $OpenCA::DBI::SQL->{VARIABLE}->{DATA}[0]."=?, ".
-    $OpenCA::DBI::SQL->{VARIABLE}->{FORMAT}[0]."=? ";
-  undef @bind_values;
-  $bind_values [0] = $arguments->{CONVERTED};
-  $bind_values [1] = $arguments->{FORMAT};
+  		$OpenCA::DBI::SQL->{VARIABLE}->{DATA}[0]."=?, ".
+  		$OpenCA::DBI::SQL->{VARIABLE}->{FORMAT}[0]."=? ";
+
+  push( @bind_values, $arguments->{CONVERTED});
+  push( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{DATA}[1]);
+
+  push( @bind_values, $arguments->{FORMAT});
+  push( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{FORMAT}[1]);
+
   ##     -- adding searchattributes - never update a date !!!
-  ##     -- getSearchAttributes don't return date as attribute
+  ##     -- getSearchAttributes does not return date as attribute
   for my $attr ( @{$arguments->{attributes}} ) {
-    # so transformation should be correct for SQL
-    if ($attr !~ /^KEY$/ and $arguments->{$attr}) {
+    if ( ($attr) and ( $attr !~ /^KEY|ROWID$/ ) ) {
+
+	if ( $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0] eq "" ) {
+		#print STDERR "ERR::PARAM MISMATCH::$attr\n";
+		next;
+	}
+
       $query .= ", ".$OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0]."=?";
-      $bind_values [scalar @bind_values] = $arguments->{$attr};
+      push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1] );
+
+      if ( $attr =~ /NOTBEFORE|NOTAFTER|LAST_UPDATE|NEXT_UPDATE|EXPIRES_AFTER|SUBMIT_DATE|LAST_ACTIVITY|SUSPENDED_AFTER|REVOKED_AFTER|APPROVED_AFTER|ARCHIVED_AFTER|DELETED_AFTER/ ) {
+	if ( $arguments->{$attr} ne "" ) {
+		$arguments->{$attr} = $self->{backend}->getNumericDate ( 
+			$arguments->{$attr} );
+	}
+      }
+
+      $self->debug_err ( "storeItem_update: $attr converted to: " .
+			$arguments->{$attr} );
+
+      push( @bind_values, $arguments->{$attr} );
     }
-  }
-  if ($arguments->{TABLE} =~ /CERTIFICATE/i) {
-    $query .= ", ".$OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[0]."=?";
-    $bind_values [scalar @bind_values] = $arguments->{NOTAFTER};
   }
 
   ##     -- set serials
   $query .= " where ".
-    $OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[0]."=?";
-  $bind_values [scalar @bind_values] = 
-    $arguments->{KEY};
+       $OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[0]."=?";
+
+  push( @bind_values, $arguments->{KEY});
+  push( @bind_types, 
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[1]);
 
   foreach my $help (@bind_values) {
-    print "      bind_values: ".$help."\n" if ($self->{DEBUG});
+    	$self->debug ("storeItem_update: bind_values: $help");
   }
-  print "    query complete, call doQuery\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_update: query complete, call doQuery");  
+  $self->debug_err ("storeItem_update: query: $query");
+  $self->debug_err ("storeItem_update: bind_values: @bind_values");
+  $self->debug_err ("storeItem_update: bind_types: @bind_types");
 
-  if ( not defined $self->doQuery ( QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{UPDATE_FAILED} );
+  if ( not defined $self->doQuery ( QUERY => $query, 
+				BIND_VALUES => \@bind_values,
+				BIND_TYPES => \@bind_types) ) {
+
+    $self->set_error ( $OpenCA::DBI::ERROR->{UPDATE_FAILED} );
     return undef;
   }
 
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return 1;
 }
+
+## ##################################################################
+## Function Name: storeItem_insert
+## ##################################################################
 
 sub storeItem_insert {
 
   my $self = shift;
   my $arguments = $_[0];
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
-  my $query;
-  my @bind_values;
+  my $query = undef;
+  my @bind_values = ();
+  my @bind_types = ();
 
-  print "### new function call ###<br>\n" if ($self->{DEBUG});
-  print "Entering storeItem_insert<br>\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_insert: Entering storeItem_insert");  
   ## INSERT
   ##   mode='update' is allowed in the future to support revoking non-existing request 
   ##   check all input data
@@ -1277,7 +1954,7 @@ sub storeItem_insert {
   ##     -- actually not implemented (do statechange only)
   ##   create row with all additional attributes
   ##     -- prepare query
-  print "  prepare query<br>\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_insert: prepare query");  
   $query = "insert into ".
     $OpenCA::DBI::SQL->{TABLE}->{$arguments->{TABLE}}." ( ".
     $OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[0].", ".
@@ -1287,44 +1964,71 @@ sub storeItem_insert {
     $query .= ", ".$OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0]
       if ($attr !~ /^KEY$/ and $arguments->{$attr});
   }
-  if ($arguments->{TABLE} =~ /CERTIFICATE/i) {
-    $query .= ", ".$OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[0];
-  }
+
+  # if ($arguments->{TABLE} =~ /CERTIFICATE/i) {
+  #   $query .= ", ".$OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[0];
+  # }
+
   $query .= ") VALUES (";
+
   ##     -- adding data, format, status
   $query .= " ?, ?, ?";
-  undef @bind_values;
-  $bind_values [0] = $arguments->{KEY};
-  $bind_values [1] = $arguments->{CONVERTED};
-  $bind_values [2] = $arguments->{FORMAT};
-  print "  try to parse header<br>\n" if ($self->{DEBUG});  
+
+  push(@bind_values, $arguments->{KEY});
+  push(@bind_types, 
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments->{TABLE}."_SERIAL"}[1]);
+
+  push(@bind_values, $arguments->{CONVERTED});
+  push(@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{DATA}[1]);
+
+  push(@bind_values, $arguments->{FORMAT});
+  push(@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{FORMAT}[1]);
+
+  $self->debug ("storeItem_insert: try to parse header");  
   ##     -- adding searchattributes - never update a date !!!
-  ##     -- getSearchAttributes don't return date as attribute
+  ##     -- getSearchAttributes does not return date as attribute
   for my $attr ( @{$arguments->{attributes}} ) {
     if ($attr !~ /^KEY$/ and $arguments->{$attr}) {
       # so transformation should be correct for SQL
-      print "      attr: ".$attr."\n" if ($self->{DEBUG});
+      $self->debug ("storeItem_insert: attr: $attr");
       $query .= ", ?";
-      $bind_values [scalar @bind_values] = $arguments->{$attr};
+      if ( $attr =~ /NOTBEFORE|NOTAFTER|LAST_UPDATE|NEXT_UPDATE|EXPIRES_AFTER|SUBMIT_DATE|LAST_ACTIVITY|SUSPENDED_AFTER|REVOKED_AFTER|APPROVED_AFTER|ARCHIVED_AFTER|DELETED_AFTER/ ) {
+	$arguments->{$attr} = $self->{backend}->getNumericDate ( 
+			$arguments->{$attr} );
+     	$self->debug_err ( "storeItem_insert: $attr converted to: " .
+			$arguments->{$attr} );
+      };
+
+      push ( @bind_values, $arguments->{$attr} );
+      push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
     }
   }
-  if ($arguments->{TABLE} =~ /CERTIFICATE/i) {
-    $query .= ", ?";
-    $bind_values [scalar @bind_values] = $arguments->{NOTAFTER};
-  }
+
   $query .= ")";
       
   foreach my $help (@bind_values) {
-    print "      bind_values: ".$help."\n" if ($self->{DEBUG});
+    $self->debug ("storeItem_insert: bind_values: $help");
   }
-  print "    query complete, call doQuery\n" if ($self->{DEBUG});  
+  $self->debug ("storeItem_insert: query complete, call doQuery");  
 
-  if ( not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{INSERT_FAILED} );
+  $self->debug_err ( "storeItem_insert: $query");
+  # for ( my $i = 0 ; $i <$#bind_values; $i++ ) {
+  # 	$self->debug_err ( "storeItem_insert: [$i]" . 
+# 				substr($bind_values[$i], 0, 60));
+ #  }
+
+  # print STDERR "insert: $query\n";
+  $self->debug_err("storeItem_insert: bind_values: @bind_values");
+  $self->debug_err("storeItem_insert: bind_types: @bind_types");
+
+  if ( not defined $self->doQuery (QUERY => $query, 
+				BIND_VALUES => \@bind_values,
+				BIND_TYPES => \@bind_types) ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{INSERT_FAILED} );
     return undef;
   }
 
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return 1;
 
 }
@@ -1333,39 +2037,42 @@ sub storeItem_insert {
 ## end of storeItem related stuff ##
 ####################################
 
+## ##################################################################
+## Function Name: updateStatus
+## ##################################################################
+
 sub updateStatus {
   
   my $self = shift;
   my $keys = { @_ };
- 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
-
-  ## get the key
-  my $key;
-  if ($keys->{DATATYPE} =~ /CA_CERTIFICATE/i) {
-    my $converted = $keys->{OBJECT}->getPEMHeader();
-    $converted   .= $keys->{OBJECT}->getPEM();
-    $converted   .= $keys->{OBJECT}->getParsed()->{KEY};
-  }
-  if ($keys->{OBJECT}) {
-    $key = $keys->{OBJECT}->getSerial ($keys->{DATATYPE});
-  } else {
-    return undef;
-  }
-
-  ## verify status (or existance)
-  if (not $self->getItem ( DATATYPE => $keys->{DATATYPE}, KEY => $key )) {
-    $self->errno ( $OpenCA::DBI::ERROR->{ENTRY_NOT_EXIST} );
-    return undef;
-  }
-
-  ## change tatus
-  return $self->storeItem ( MODE     => "UPDATE",
-                            OBJECT   => $keys->{OBJECT},
-                            DATATYPE => $keys->{NEWTYPE}
-                          );
   
+  my $new_status = $keys->{STATUS};
+  my $new_datatype = $keys->{NEWTYPE};
+  my $item = $keys->{OBJECT};
+
+  return undef if ( not $item );
+ 
+  if ( not $new_status ) {
+	if ( not $new_datatype ) {
+		return undef;
+	}
+	if( $new_datatype =~ /^([^\_]+)\_/ ) {
+		$new_status = $1;
+	} else {
+		return undef;
+	}
+  }
+
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $item->setStatus ( "$new_status");
+
+  return $self->updateItem ( OBJECT => $item );
+
 }
+
+## ##################################################################
+## Function Name: getItem
+## ##################################################################
 
 sub getItem {
 
@@ -1379,82 +2086,201 @@ sub getItem {
   
   my $self = shift;
   
-  print "OpenCA::DBI->getItem: ### new function call ###<br>\n".
-        "OpenCA::DBI->getItem: Entering sub getItem<br>\n" if ($self->{DEBUG});
+  $self->debug ("getItem: Entering sub getItem");
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my ( $fileName, $item, $body, $header, $hash, $tmpBody );
   
   my %arguments = $self->getArguments ( @_ );
-  return undef if (not defined %arguments);
+  return undef if (not %arguments);
 
-  my $query;
-  my @bind_values;
+  my $query = undef;
+  my @bind_values = ();
+  my @bind_types = ();
 
   ## support for direct access to latest CRL
   if ((not defined $arguments{KEY}) && ($arguments{TABLE} ne "CRL")) {
-    $self->errno ( $OpenCA::DBI::ERROR->{ MISSING_ARG_SERIAL } );
+    $self->set_error ( $OpenCA::DBI::ERROR->{ MISSING_ARG_SERIAL } );
     return undef;
   }
 
-  print "OpenCA::DBI->getItem: data complete\n" if ($self->{DEBUG});  
+  $self->debug ("getItem: data complete");  
 
   ## I hope the people only search for Certs, Requests and CRRs
   ## mmh this is impossible
-  $query = "select * from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}}." where ";
+  $query = "select ";
+
+  my @cols = @{$OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$arguments{TABLE}}};
+  for (my $i = 0; $i <= $#cols; $i++) {
+	$query .= $OpenCA::DBI::SQL->{VARIABLE}->{$cols[$i]}[0] . " ";
+	$query .= ", " if ( $i < $#cols );
+  };
+
+  $query .= " from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}} .
+							" where ";
+
   if (defined $arguments{KEY}) {
-    if ($arguments{TABLE} =~ /CA_CERTIFICATE/i)
-    {
-        $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0]." like ?)";
+    if ($arguments{TABLE} =~ /^CA_CERTIFICATE/i) {
+        $query .= "(" . $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE} .
+						"_SERIAL"}[0]." like ?)";
     } else {
-        $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0]."=?)";
+        $query .= "(" . $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE} .
+						"_SERIAL"}[0]."=?)";
     }
-    if ($arguments{STATUS}) {
-      $query .= " and (".$OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[0]." like '".$arguments{STATUS}."')";
-      $query .= $self->handleExpiredCert ( \%arguments ) if ($arguments{NOTAFTER});
+    push ( @bind_values, $arguments{KEY} );
+    push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[1]);
+
+    if (($arguments{STATUS} =~ /REVOKED|SUSPENDED/ ) and 
+				($arguments{TABLE} =~ /^CERTIFICATE/i)) {
+    	$query .= " and (" . $OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[0] .
+ 					" like ?)";
+    	push ( @bind_values, $arguments{STATUS} );
+        push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[1]);
     }
-    $bind_values [0] = $arguments{KEY};
   } else {
     ## to support most actual CRL (you can use it find the last cert etc. too)
-    $query .= $OpenCA::DBI::SQL->{VARIABLE}->{DATE}[0]." like (select MAX(".
-      $OpenCA::DBI::SQL->{VARIABLE}->{LAST_UPDATE}[0].") from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}}.")";
+    $query .= $OpenCA::DBI::SQL->{VARIABLE}->{DATE}[0]." like (select MAX(" .
+		$OpenCA::DBI::SQL->{VARIABLE}->{LAST_UPDATE}[0] .
+		") from " . $OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}}.")";
     undef @bind_values;
   }
-  print "OpenCA::DBI->getItem: query: ".$query."<br>\n" if ($self->{DEBUG});
+
+  # print STDERR "QUERY => $query\n";
+  # print STDERR "VALUES => @bind_values\n";
+  # print STDERR "VALUES => @bind_types\n";
 
   my ($rv);
 
   ## do_query
-  if ( not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-    return undef;
-  }
-  print "OpenCA::DBI->getItem: query completed<br>\n" if ($self->{DEBUG});
-    
-  ## false is ok  
-  $rv = $self->{STH}[scalar (@{$self->{STH}}) -1]->state;
-
-  if ($rv) {
-    ## db-connection no longer needed
-    ## I can take rollback too, it is not important because 
-    ## it was only a read action and the database has nothing to do
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+  if ( not defined $self->doQuery (QUERY => $query, 
+		BIND_VALUES => \@bind_values, BIND_TYPES  => \@bind_types) ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+    $self->debug_err ( "getItem: failedQuery: query: $query");
+    $self->debug_err ( "getItem: failedQuery: bind_values: @bind_values");
+    $self->debug_err ( "getItem: failedQuery: bind_types: @bind_types");
     return undef;
   }
 
-  print "OpenCA::DBI->getItem: check that there is a non-empty result<br>\n"
-	if ($self->{DEBUG});
-
-  ## STH->rows doesn't work with Oracle (DB2 doesn't like rows sometimes too)
-  my $arrayref = $self->{STH}[scalar (@{$self->{STH}}) -1]->fetchrow_arrayref;
+  ## STH->rows does not work with Oracle (DB2 does not like rows sometimes too)
+  my $arrayref = $self->{STH}->fetchrow_arrayref;
   if (not defined $arrayref or not $arrayref) {
     return undef;
   }
 
-  return $self->getResultItem (ARGUMENTS => \%arguments, ARRAYREF => $arrayref);
+  return $self->getResultItem (ARGUMENTS => \%arguments, 
+					ARRAYREF => $arrayref);
 
 }
+
+## ##################################################################
+## Function Name: getPrevItem
+## ##################################################################
+
+sub getPrevItem {
+
+  ## Get an Item provided the exact data to match:
+  ## DATATYPE, KEY. Will return, if exists, the data
+  ## on the corresponding dB file.
+  
+  ## Actually, as the search function, the returned
+  ## value will be a referenced object (REQ, X509,
+  ## CRL, etc... ).
+  
+  my $self = shift;
+
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+
+  my %arguments = $self->getArguments ( @_ );
+  return undef if (not %arguments);
+
+  my $query = undef;
+  my @bind_values = (); 
+  my @bind_types = (); 
+
+  ## Let us make some needed check
+  if (not $arguments{TABLE}) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{ MISSING_ARG_TABLE } );
+    return undef;
+  }
+
+  # if ( not exists $arguments{KEY} ) {
+  #   if ($arguments{TABLE} eq "CA_CERTIFICATE" or
+   #      			$arguments{TABLE} eq "CA") {
+   #      $arguments{KEY} = "";
+   #  } else {
+   #      $arguments{KEY} = -1;
+   #  }
+   #  return undef;
+  # }
+
+  my $and = 0;
+  $query = "SELECT " . $OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . ", " .
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0] .
+	" from " . $OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}};
+
+  if (defined $arguments{KEY} and $arguments{KEY} ne "-1" ) {
+    $query .= " where ".
+	$OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . " < ( " .
+	" select " . $OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . " from " .
+	$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}} . " where " .
+        $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0] .
+	" = ? ) ";
+    push (@bind_values, $arguments{KEY});
+    push (@bind_types, 
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[1]);
+    $and = 1;
+  }
+
+  $query .= " ORDER BY " .
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_ORDERBY"}[0] .
+	" DESC";
+
+  print STDERR "getPrevItem: query: $query\n";
+  print STDERR "getPrevItem: bind_values: @bind_values\n";
+  print STDERR "getPrevItem: bind_types: @bind_types\n";
+
+  ## do_query
+  if ( not defined $self->doQuery (QUERY => $query, 
+		BIND_VALUES => \@bind_values, BIND_TYPES => \@bind_types) ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+    return undef;
+  }
+
+  my $ref = $self->{STH}->fetchrow_arrayref;
+
+  $self->debug_err ("getPrevItem: arg: " . $arguments{KEY});
+  $self->debug_err ("getPrevItem: result: " . $ref->[0]);
+  $self->debug_err ("getPrevItem: result: " . $ref->[1]);
+
+  print STDERR "getPrevItem: arg: " . $arguments{KEY} . "\n";
+  print STDERR "getPrevItem: rawid: " . $ref->[0] . "\n";
+  print STDERR "getPrevItem: serial: " . $ref->[1] . "\n";
+
+  if (defined $ref and exists $ref->[0] and $ref->[0] ne "") {
+    return $self->getItem (DATATYPE => $arguments{TABLE},
+                           KEY      => $ref->[1],
+                           MODE     => $arguments{MODE}
+                          );
+  } else {
+    if ((defined $ref) or (not defined $self->{STH}->err)) {
+      $self->debug ("getNextItem: there is no next item");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      return undef; ## no errors no results
+    } else { # mmh this should never happen here
+      $self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+      return undef;
+    }
+  }
+  
+  ## never reached
+  $self->set_error ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
+  return undef;
+}
+
+## ##################################################################
+## Function Name: getNextItem
+## ##################################################################
 
 sub getNextItem {
 
@@ -1468,183 +2294,116 @@ sub getNextItem {
   
   my $self = shift;
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my %arguments = $self->getArguments ( @_ );
-  return undef if (not defined %arguments);
+  return undef if (not %arguments);
 
-  my $query;
-  my @bind_values; 
+  my $query = undef;
+  my $rowid = -1;
+  my @bind_values = (); 
+  my @bind_types = (); 
 
-  ## Let's make some needed check
+  ## Let us make some needed check
   if (not $arguments{TABLE}) {
-    $self->errno ( $OpenCA::DBI::ERROR->{ MISSING_ARG_TABLE } );
+    $self->set_error ( $OpenCA::DBI::ERROR->{ MISSING_ARG_TABLE } );
     return undef;
   }
-  if ( (not $arguments{KEY}) and ($arguments{KEY} != 0) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{ MISSING_ARG_SERIAL } );
-    return undef;
-  }
+
+  # if ( $arguments{KEY} ) {
+  #   $query = "select ". $OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . ", " .
+ #	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0] .
+ #	" from " . $OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}} . 
+ #	" where " . 
+ #	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0] .
+ #	" = ?";
+ #	push(@bind_values, $arguments{KEY});
+ #    	push(@bind_types, 
+ ##	    $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[1]);
+#
+#  	## do_query
+#  	if ( not defined $self->doQuery (QUERY => $query, 
+#		BIND_VALUES => \@bind_values, BIND_TYPES => \@bind_types) ) {
+##   	$self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+#    	return undef;
+#  }
+#  my $ref = $self->{STH}->fetchrow_arrayref;
+
+  $self->debug_err ("getNextItem: arg: " . $arguments{KEY});
+	
+#  }
 
   ## I hope the people only search for Certs, Requests and CRRs
   ## mmh this is impossible
   my $and = 0;
-  undef @bind_values;
-  $query = "select MIN(".$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0].")".
-    " from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}};
-  if (defined $arguments{KEY}) {
-    $query .= " where (".
-              $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0]." > ? ".
-              ")";
-    $bind_values [0] = $arguments{KEY};
+  $query = "select ". $OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . ", " .
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0] .
+	" from " . $OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}};
+
+  if (defined $arguments{KEY} and $arguments{KEY} ne "-1" ) {
+    $query .= " where ".
+	$OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . " > ( " .
+	" select " . $OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0] . " from " .
+	$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}} . " where " .
+        $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0] .
+	" = ? )";
+    push (@bind_values, $arguments{KEY});
+    push (@bind_types, 
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[1]);
     $and = 1;
   }
-  if ($arguments{STATUS}) {
-    if ($and) {
-      $query .= " and ";
-    } else {
-      $query .= " where ";
-    }
-    ## the like is necessary for IBM DB2
-    $query .= " (".$OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[0]." like ?)";
-    $bind_values [scalar @bind_values] = $arguments{STATUS};
-    $query .= $self->handleExpiredCert ( \%arguments ) if ($arguments{NOTAFTER}); 
-  }
-  print "  OpenCA::DBI->getNextItem: query: ".$query."<br>\n" if ($self->{DEBUG});
+
+  $query .= " ORDER BY " .
+	$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_ORDERBY"}[0];
 
   ## do_query
-  if ( not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+  if ( not defined $self->doQuery (QUERY => $query, 
+		BIND_VALUES => \@bind_values, BIND_TYPES => \@bind_types) ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
     return undef;
   }
-      
-  my $ref = $self->{STH}[scalar (@{$self->{STH}}) -1]->fetchrow_arrayref;
+  my $ref = $self->{STH}->fetchrow_arrayref;
 
-  if (defined $ref) {
-    # copy by value !!!
-    $arguments{KEY} = $ref->[0];
-  }
+  $self->debug_err ("getNextItem: arg: " . $arguments{KEY});
+  $self->debug_err ("getNextItem: result: " . $ref->[0]);
+  $self->debug_err ("getNextItem: result: " . $ref->[1]);
 
-  if (defined $arguments{KEY}) {
+  if (defined $ref and exists $ref->[0] and $ref->[0] ne "") {
     return $self->getItem (DATATYPE => $arguments{TABLE},
-                           KEY      => $arguments{KEY},
+                           KEY      => $ref->[1],
                            MODE     => $arguments{MODE}
                           );
   } else {
-    ## false is SQLSTATE '0000000' which means all is ok
-    if (not $self->{STH}[scalar (@{$self->{STH}}) -1]->state) {
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-      return 0; ## no errors no results
+    if (defined $ref or
+        not defined $self->{STH}->err) {
+      $self->debug ("getNextItem: there is no next item");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      return undef; ## no errors no results
     } else { # mmh this should never happen here
-      $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+      $self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
       return undef;
     }
   }
   
   ## never reached
-  $self->errno ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
   return undef;
 
 }
 
-sub getPrevItem {
-
-  ## Get an Item provided the exact data to match:
-  ## DATATYPE, KEY. Will return, if exists, the data
-  ## on the corresponding dB file.
-  
-  ## Actually, as the search function, the returned
-  ## value will be a referenced object (REQ, X509,
-  ## CRL, etc... ).
-  
-  my $self = shift;
-  
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
-
-  my %arguments = $self->getArguments ( @_ );
-  return undef if (not defined %arguments);
-
-  my $query;
-  my @bind_values;
-
-  ## Let's make some needed check
-  if (not $arguments{TABLE}) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
-    return undef;
-  }
-  if (not $arguments{KEY} and ($arguments{KEY} != 0)) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_SERIAL} );
-    return undef;
-  }
-
-  ## I hope the people only search for Certs, Requests and CRRs
-  ## mmh this is impossible
-  ## Attention date is not numeric !!!
-  $query = "select MAX(".$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0].")".
-    " from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}};
-  undef @bind_values;
-
-  my $where = 0;
-  if (defined $arguments{KEY})
-  {
-      $where = 1;
-      $query .= " where (".$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0]."< ? ".")";
-      $bind_values [0] = $arguments{KEY}; # date is not numeric
-  }
-  if ($arguments{STATUS}) {
-    ## the like is necessary for IBM DB2
-    if ($where)
-    {
-        $query .= " and ";
-    } else {
-        $query .= " where ";
-    }
-    $query .= " (".$OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[0]." like ?)";
-    $bind_values [scalar @bind_values] = $arguments{STATUS};
-    $query .= $self->handleExpiredCert ( \%arguments ) if ($arguments{NOTAFTER});
-  }
-
-  my $rv;
-
-  ## do_query
-  if ( not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-    return undef;
-  }
-
-  my $ref = $self->{STH}[scalar (@{$self->{STH}}) -1]->fetchrow_arrayref;
-
-  if (defined $ref) {
-    # copy by value !!!
-    $arguments{KEY} = $ref->[0];
-  }
-
-  if (defined $arguments{KEY}) {
-    return $self->getItem (DATATYPE => $arguments{TABLE},
-                           KEY      => $arguments{KEY},
-                           MODE     => $arguments{MODE}
-                          );
-  } else {
-    ## false is SQLSTATE '0000000' which means all is ok
-    if (not $self->{STH}[scalar (@{$self->{STH}}) -1]->state) {
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-      return 0; ## no errors no results
-    } else { # mmh this should never happen here
-      $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-      return undef;
-    }
-  }
-  
-  ## never reached
-  $self->errno ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
-  return undef;
-
-}
+## ##################################################################
+## Function Name: deleteItem
+## ##################################################################
 
 sub deleteItem {
-  ## it's not neccessary to delete an object if it is revoked/marked as deleted
+  ## it is not neccessary to delete an object if it is revoked/marked
+  ## as deleted
   return 1;
 }
+
+## ##################################################################
+## Function Name: destroyItem
+## ##################################################################
 
 sub destroyItem {
   ## attention this code is not for normal use only for recovery reasons !
@@ -1662,23 +2421,24 @@ sub destroyItem {
   my $self = shift;
   my $keys = { @_ };
   
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my $type  = $keys->{DATATYPE};
   my $table = $self->getTable ($type);
   
   my $serial = $keys->{KEY};  ## Key passed when stored item
 
-  my $query;
-  my @bind_values;
+  my $query = undef;
+  my @bind_values = ();
+  my @bind_types = ();
 
-  ## Let's make some needed check
+  ## Let us make some needed check
   if (not $table) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
     return undef;
   }
   if (not $serial and ($serial != 0)) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_SERIAL} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{MISSING_ARG_SERIAL} );
     return undef;
   }
 
@@ -1686,21 +2446,27 @@ sub destroyItem {
   ## mmh this is impossible
   ## Attention date is not numeric !!!
   $query = "delete from ".$OpenCA::DBI::SQL->{TABLE}->{$table}." where ".
-    $OpenCA::DBI::SQL->{VARIABLE}->{$table."_SERIAL"}[0]."= ? ".
-  undef @bind_values;
-  $bind_values [0] = $serial; # date is not numeric
+	$OpenCA::DBI::SQL->{VARIABLE}->{$table."_SERIAL"}[0]."= ? ".
+  push ( @bind_values, $serial);
+  push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$table."_SERIAL"}[1]);
 
   ## do_query
-  if ( not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{DELETE_FAILED} );
-    return undef;
+  if ( not defined $self->doQuery (QUERY => $query, 
+	BIND_VALUES => \@bind_values, BIND_TYPES => \@bind_types) ) {
+	$self->set_error ( $OpenCA::DBI::ERROR->{DELETE_FAILED} );
+	return undef;
   }
 
   ## successful
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
   return 1;
 
 }
+
+
+## ##################################################################
+## Function Name: Search Items
+## ##################################################################
 
 sub elements {
 
@@ -1712,79 +2478,13 @@ sub elements {
   ## value will be a referenced object (REQ, X509,
   ## CRL, etc... ).
   
-  my $self = shift;
-  
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
-
-  my %arguments = $self->getArguments ( @_ );
-  return undef if (not defined %arguments);
-  
-  print "### new function call ###<br>\n".
-        "  Entering function elements<br>\n" if ($self->{DEBUG});
-
-  my $query;
-  my @bind_values;    
-  
-  ## Let's make some needed check
-  if (not $arguments{TABLE}) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
-    return undef;
-  }
-  my $count;
-
-  ## I hope the people only search for Certs, Requests and CRRs
-  ## mmh this is impossible
-  ## Attention date is not numeric !!!
-  $query = "select count(*)  from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}};
-  undef @bind_values;
-  if ($arguments{STATUS}) {
-    ## the like is necessary for IBM DB2
-    $query .= " where ".$OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[0]." like ?";
-    $bind_values [0] = $arguments{STATUS};
-    $query .= $self->handleExpiredCert ( \%arguments ) if ($arguments{NOTAFTER});
-  }
-  
-  my $rv;
-
-  ## do_query
-  if (not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-    return undef;
-  }
-
-  ## here I have to use state because DB2 
-  ## returns rows:=-1 even if there is a result
-  ## false means here a successful performed SQL-query ('00000000')
-  $rv = $self->{STH}[scalar (@{$self->{STH}}) -1]->state;
-  print "  state: \$rv=".$rv."<br>\n" if ($self->{DEBUG});
-         
-  if (not $rv) {
-    # copy by value !!!
-    $count = $self->{STH}[scalar (@{$self->{STH}}) -1]->fetchrow_arrayref->[0];
-  }
-
-  if (not $rv) {
-    ## $rv > 1 is not possible because of SQL's COUNT-Operator
-    print "  elements comleted successful<br>\n".
-          "### leaving function elements ###<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-    return $count;
-  ## } elsif ($rv == 0) {
-  ##   $self->errno ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
-  ##   print "  elements comleted unsuccessful<br>\n".
-  ##         "### leaving function elements ###<br>\n" if ($self->{DEBUG});
-  ##   return undef; ## unexpected error
-  } else { # $rv < 0 mmh this should never happen here
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-    print "  next round - db-request failed<br>\n" if ($self->{DEBUG});
-    return undef;
-  }
-  
-  ## never reached
-  $self->errno ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
-  return undef;
-
+	my $self = shift;
+	return $self->searchItems( MODE=>"COUNT", @_ );
 }
+
+## ##################################################################
+## Function Name: Search Items
+## ##################################################################
 
 sub searchItems { # new one !!!
 
@@ -1798,56 +2498,189 @@ sub searchItems { # new one !!!
   
   my $self = shift;
   
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  my $keys = { @_ };
+
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
 
   my (@retList, @objRetList);
+  my ( $items );
 
-  print "### new function call ###<br>\n".
-        "  Entering function searchItems<br>\n" if ($self->{DEBUG});
- 
-  print "    OpenCA::DBI::errno: ".$errno."<br>\n" if ($self->{DEBUG});
+  $self->debug ("searchItems: Entering function searchItems");
+  $self->debug ("searchItems: OpenCA::DBI::errno: $errno");
+
   my %arguments = $self->getArguments ( @_ );
-  print "    OpenCA::DBI::errno: ".$errno."<br>\n" if ($self->{DEBUG});
+
+  $self->debug ("searchItems: OpenCA::DBI::errno: $errno");
+
   return undef if ($errno);
-  print "dbi-status:".$arguments {STATUS}."<br>\n" if ($self->{DEBUG});
 
-  my $query;
-  my @bind_values;
-  undef @bind_values;
+  $self->debug ("searchItems: dbi-status:".$arguments {STATUS});
 
-  ## Let's make some needed check
+  my $query = undef;
+  my @bind_values = ();
+  my @bind_types = ();
+
+  ## Let us make some needed check
   if (not $arguments {TABLE}) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
     return undef;
   }
   
-  ## let's prepare the question
+  ## let us prepare the question
   my $and = 0;
-  $query = "select * from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments {TABLE}};
+  my $mode = "*";
+  my $today = gmtime;
+  my $now = $self->{backend}->getNumericDate( "$today" );
+
+  if ( $arguments { MODE } =~ /ROWS|COUNT/ ) {
+	$mode = "count(*)";
+  } elsif ( $arguments { MODE } =~ /KEYLIST/ ) {
+	$mode = $OpenCA::DBI::SQL->{VARIABLE}->{$arguments {TABLE}.
+							"_SERIAL"}[0];
+  } else {
+	$mode = '*';
+  }
+
+  $query = "select $mode from " . 
+		$OpenCA::DBI::SQL->{TABLE}->{$arguments {TABLE}};
+
   ## check for unique identifier scan
-  if ( $arguments{KEY} and ($arguments {TABLE} =~ /^CERTIFICATE/ ) ) {
+  if ( $arguments{KEY} and ($arguments {TABLE} =~ /CERTIFICATE/ ) ) {
     if ($and) {
       $query .= " and ";
     } else {
       $query .= " where ";
       $and = 1;
     }
-    $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{CERTIFICATE_SERIAL}[0]."=?)";
+    if ( $arguments {TABLE} =~ /CA_CERTIFICATE/ ) {
+    	$query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{CA_CERTIFICATE_SERIAL}[0]."=?)";
+    } else {
+    	$query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{CERTIFICATE_SERIAL}[0]."=?)";
+    }
+
     ## prepare bind_values
-    $bind_values [scalar (@bind_values)] = $arguments{KEY};
+    push ( @bind_values, $arguments{KEY});
+    push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{CERTIFICATE_SERIAL}[1]);
     ## delete from keys
     delete $arguments{KEY};
   }
-    
-  print "  query now:".$query."<br>\n" if ($self->{DEBUG});
 
-  ## For every keyword let's get the list of values
+  if ( $arguments {EXPIRES_BEFORE} or $arguments {EXPIRES_AFTER} ) {
+	delete $arguments { STATUS };
+  } else {
+	if ( $arguments { STATUS } =~ /EXPIRED/i ) {
+		$arguments { EXPIRES_BEFORE } = $now;
+		delete $arguments { STATUS };
+	} elsif ( $arguments { STATUS } =~ /VALID/ ) {
+		$arguments { EXPIRES_AFTER } = $now;
+		delete $arguments { STATUS };
+	}
+  }
+
+  $self->debug(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<\n");
+  $self->debug("EXPIRES_BEFORE => " . $arguments {EXPIRES_BEFORE} . "\n");
+  $self->debug("EXPIRES_AFTER => " . $arguments {EXPIRES_AFTER} . "\n");
+  $self->debug("TABLE => " . $arguments {TABLE} . "\n");
+  $self->debug(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<");
+
+  if ( $arguments {EXPIRES_BEFORE} and 
+			($arguments {TABLE} =~ /CERTIFICATE/ ) ) {
+    if ($and) {
+      $query .= " and ";
+    } else {
+      $query .= " where ";
+      $and = 1;
+    }
+    $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[0]." < ? )";
+    ## prepare bind_values
+    push( @bind_values, $arguments{EXPIRES_BEFORE} );
+    push( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[1]);
+    ## delete from keys
+    delete $arguments{EXPIRES_BEFORE};
+  }
+
+  if ( $arguments {EXPIRES_AFTER} and 
+  			($arguments {TABLE} =~ /CERTIFICATE/ ) ) {
+    if ($and) {
+      $query .= " and ";
+    } else {
+      $query .= " where ";
+      $and = 1;
+    }
+    $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[0]." > ? )";
+    ## prepare bind_values
+    push ( @bind_values, $arguments{EXPIRES_AFTER} );
+    push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[1]);
+    ## delete from keys
+    delete $arguments{EXPIRES_AFTER};
+  }
+
+  if ( $arguments {EXPIRES_BEFORE} and 
+	  			($arguments {TABLE} =~ /^CRL/ ) ) {
+    if ($and) {
+      $query .= " and ";
+    } else {
+      $query .= " where ";
+      $and = 1;
+    }
+    $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{NEXT_UPDATE}[0]." < ? )";
+    ## prepare bind_values
+    push ( @bind_values, $arguments{EXPIRES_BEFORE} );
+    push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{NEXT_UPDATE}[1]);
+    ## delete from keys
+    delete $arguments{EXPIRES_BEFORE};
+  }
+
+  if ( $arguments {EXPIRES_AFTER} and 
+	  			($arguments {TABLE} =~ /^CRL/ ) ) {
+    if ($and) {
+      $query .= " and ";
+    } else {
+      $query .= " where ";
+      $and = 1;
+    }
+    $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{NEXT_UPDATE}[0]." > ? )";
+    ## prepare bind_values
+    push ( @bind_values, $arguments{EXPIRES_AFTER} );
+    push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{NEXT_UPDATE}[1]);
+    ## delete from keys
+    delete $arguments{EXPIRES_AFTER};
+  }
+
+  if ( $arguments{FROM} ) {
+ 
+    if ($and) {
+      $query .= " and ";
+    } else {
+      $query .= " where ";
+      $and = 1;
+    }
+    $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[0]." >= ? ) ";
+    push ( @bind_values, $arguments{FROM} );
+    push ( @bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{ROWID}[1]);
+    delete $arguments{FROM};
+  }
+
+  if ( $arguments { ITEMS } ) { 
+	$items = $arguments{ITEMS};
+	delete $arguments{ITEMS};
+  }
+
+  $self->debug ("searchItems: query now: $query");
+
+  ## For every keyword let us get the list of values
   my @attributes = $self->getSearchAttributes (DATATYPE=>$arguments {TABLE});
+
   my $attr;
+  my $array = 0;
+  my @arrayVal = ();
+
   for $attr ( @attributes ) {
-    print "  scan attribute: ".$attr."<br>\n" if ($self->{DEBUG});
+    $self->debug ("searchItems: scan attribute: $attr");
+
     if ($arguments {$attr}) {
-      print "  attribute's content: ".$arguments {$attr}."<br>\n" if ($self->{DEBUG});
+      $self->debug ("searchItems: attribute's content: ".$arguments {$attr});
+
       ## get from keys
       if ($and) {
 	$query .= " and ";
@@ -1855,214 +2688,194 @@ sub searchItems { # new one !!!
 	$query .= " where ";
 	$and = 1;
       }
+      if ( ref($arguments {$attr}) =~ /ARRAY/ ) {
+	      $self->debug ( "ARGUMENT IS AN ARRAY!!!\n");
+	      $array = 1;
+	      @arrayVal = @{ $arguments{$attr}};
+      } else {
+	      $array = 0;
+	      @arrayVal = ( $arguments{$attr} );
+      }
+
       if ($attr =~ /^KEY$/) {
         $query .= "(".
-          $OpenCA::DBI::SQL->{VARIABLE}->{$arguments {TABLE}."_SERIAL"}[0]."=?)";
+          $OpenCA::DBI::SQL->{VARIABLE}->{$arguments {TABLE}."_SERIAL"}[0];
+	  
+	if( $array eq "1" ) {
+		$query .= " in ( ";
+		foreach my $tmpVal ( @arrayVal ) {
+			$query .= " ? ,";
+                        push (@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[1]);
+		}
+		$query =~ s/,$//;
+		$query .= " ) ";
+	} else {
+	  $query .= "= ? ";
+          push (@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[1]);
+	}
+	$query .= ") ";
+
       } elsif ($OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1] =~ /BIGINT/i) {
-        print "    OpenCA::DBI->searchItems: BIGINT: ".
-              $attr." --&gt; ".
-              $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]."<br>\n"
-            if ($self->{DEBUG});
-        $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0]." = ?)";
+        $self->debug ("searchItems: BIGINT: ".
+                      $attr." --&gt; ".
+                      $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
+        $query .= "( ".$OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0];
+
+	if( $array eq "1" ) {
+		$query .= " in ( ";
+		foreach my $tmpVal ( @arrayVal ) {
+			$query .= " ? ,";
+                        push (@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
+		}
+		$query =~ s/,$//;
+		$query .= " ) ";
+	} else {
+	  $query .= " = ? ";
+          push (@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
+	}
+
+	$query .= ") ";
+
       } else {
-        print "    OpenCA::DBI->searchItems: TEXT: ".
-              $attr." --&gt; ".
-              $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]."<br>\n"
-            if ($self->{DEBUG});
-        $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0]." like ?)";
+        $self->debug ("searchItems: TEXT: ".
+                      $attr." --&gt; ".
+                      $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
+
+        $query .= "(".$OpenCA::DBI::SQL->{VARIABLE}->{$attr}[0];
+
+	if( $array eq "1" ) {
+		$query .= " in ( ";
+		foreach my $tmpVal ( @arrayVal ) {
+		 	$query .= " ? ,";
+                        push (@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
+		}
+		$query =~ s/,$//;
+		$query .= " ) ";
+	} else {
+	  $query .= " like ? ";
+          push (@bind_types, $OpenCA::DBI::SQL->{VARIABLE}->{$attr}[1]);
+	}
+
+	$query .= ") ";
+
       }
-      if ($attr =~ /STATUS/i) {
-        $query .= $self->handleExpiredCert ( \%arguments ) if ($arguments{NOTAFTER});
-      }
-      ## prepare bind_values
-      $bind_values [scalar (@bind_values)] = 
-        $arguments {$attr};
+
+      if ( $array eq "1" ) {
+	      push ( @bind_values, @arrayVal );
+      } else {
+	      ## prepare bind_values
+      	      $bind_values [scalar (@bind_values)] = $arguments {$attr};
+      };
+
       ## delete from keys
       delete $arguments{$attr};
     }
   }
 
-  ## order by key to support correct listings
-  $query.= " order by ".
-           $OpenCA::DBI::SQL->{VARIABLE}->{$arguments {TABLE}."_SERIAL"}[0];
+  if ( $mode ne "count(*)" ) {
+      ## order by key to support correct listings
+	if ( $arguments{ORDERBY} ) {
+		$query .= " ORDER BY " .
+			$OpenCA::DBI::SQL->{VARIABLE}->{$arguments{ORDERBY}}[0];
+	} else {
+      		$query.= " order by ".
+             		$OpenCA::DBI::SQL->{VARIABLE}->{$arguments {TABLE}."_ORDERBY"}[0];
+	}
+  }
+  delete $arguments { ORDERBY };
 
-  print "  query:".$query."<br>\n" if ($self->{DEBUG});
-  
+  # Limit the results!!!!
+  if ( $items ) {
+  	my $hquery = $OpenCA::DBI::DB->{$self->{DB_Type}}->{LIMIT};
+
+	$items = -1 if ( not $items );
+
+  	$hquery =~ s/__QUERY__/$query/;
+  	$hquery =~ s/__MAXITEMS__/$items/;
+  	$query  = $hquery; 
+  }
+
   my $rv = 0;
 
+  $self->debug_err ( "searchItems: query now: $query",
+  		     "searchItems: arguments: @bind_values" );
+
+  #print STDERR "QUERY => $query\n";
+  #print STDERR "VALUE => @bind_values\n";
+
   ## do_query
-  $rv = $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values);
+  $rv = $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values, BIND_TYPES => \@bind_types);
   if (not defined $rv ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-    return undef;
+  	$self->set_error ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
+  	return undef;
   } else {
 
-    ## original "stolen" from OpenCA::DB sub searchItemDB
+    $self->debug ("searchItems: errstr(undef is OK): ".
+    						$self->{STH}->errstr());
+    $self->debug ("searchItems: rows (this is buggy in DBD::DB2 and " . 
+    					"DBD::Oracle)): ".  $self->{STH}->rows);
 
-    print "  state(false is OK): ".
-      $self->{STH}[scalar (@{$self->{STH}})-1]->state."<br>\n" if ($self->{DEBUG});
-    print "  rows (this is buggy in DBD::DB2 and DBD::Oracle)): ".
-      $self->{STH}[0]->rows."<br>\n" if ($self->{DEBUG});
-    ## $self->{STH}[scalar (@{$self->{STH}})-1]->rows."<br>\n" if ($self->{DEBUG});
     ## Results
-    ## be warned fetchrow_hashref doesn't work with DB2
-    while ( (my $h =  $self->{STH}[scalar (@{$self->{STH}}) -1]->fetchrow_arrayref) ) {
-      print "  item: ".
-            $h->[0].
-            "<br>\n" if ($self->{DEBUG});
-      push ( @retList, $h->[0] );
+    ## be warned fetchrow_hashref does not work with DB2
+    @retList = ();
+    while ( (my $h =  $self->{STH}->fetchrow_arrayref) ) {
+	# $counter++;
+
+	$self->debug ("searchItems: item: ".$h->[0]);
+	push ( @retList, $h->[0] );
     }
 
     ## because of searchItemDB + searchItem 
-    ## but what it's doing ?
-    if( $arguments {MODE} eq "ROWS" ) {
-      print "  function searchItems completed successful<br>\n".
-            "### leaving function searchItems ###<br>\n" if ($self->{DEBUG});
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-      return ($#retList+1);
+    ## but what it is doing ?
+    if( $arguments {MODE} =~ /ROWS|COUNT/i ) {
+      $self->debug ("searchItems: leaving function successfully (mode $mode)");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      return ($retList[0]);
+    } elsif ( $arguments{MODE} =~ /KEYLIST/i ) {
+      $self->debug ("searchItems: leaving function successfully");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      return ( @retList );
     }
-      
+
     for my $i (@retList) {
       my $obj;
 	
-      next if ( not $obj = $self->getItem( DATATYPE => $arguments{TABLE},
-                                           STATUS   => $arguments{STATUS}, 
-                                           KEY      => $i ));
-      print "  add an object to the returnlist of searchItem\n" if ($self->{DEBUG});
+      	if ( not $obj = $self->getItem( DATATYPE => $arguments{TABLE},
+                                        STATUS   => $arguments{STATUS}, 
+                                        KEY      => $i )) { 
+		$self->debug_err ( "searchItems: error creating object " .
+				$arguments{TABLE} . "::" . $arguments{STATUS} .
+				"::" . $i);
+	}
+
+      $self->debug ("searchItems: add an object to the returnlist");
       push( @objRetList, $obj );
     }
 
-    print "  function searchItems completed successful<br>\n".
-          "### leaving function searchItems ###<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+    $self->debug ("searchItems: leaving function successfully");
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
     return @objRetList;
 
   }
 
   ## never reached
-  $self->errno ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{UNEXPECTED_ERROR} );
   return undef;
 
 }
 
+## ##################################################################
+## Function Name: list Items
+## ##################################################################
+
 sub listItems {
-  my $self = shift;
-  my $keys = { @_ };
-
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
-
-  my $dataType	= $keys->{DATATYPE};
-  my $items 	= $keys->{ITEMS};
-  my $from 	= $keys->{FROM};
-  ## my $to 		= $keys->{TO};
-  my $mode	= $keys->{MODE};
-
-  my ( @ret, $retItems, $i, $tmpObj );
-
-  print "### new function call ###<br>\n".
-        "Entering function listItems<br>\n" if ($self->{DEBUG});
-
-  if( not $dataType ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_DATATYPE} );
-    return undef;
-  }
-
-  ## check sql-type of key of table
-  my $table = $self->getTable ($dataType);
-  if (not $table) {
-    $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_TABLE} );
-    return undef;
-  }
-  my $pseudo_sql_type = 
-    $OpenCA::DBI::SQL->{VARIABLE}->{
-      $OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$table}[0]
-    }[1];
-  my $is_int = 0;
-  $is_int = 1 if ( $pseudo_sql_type =~ /INT/i );
-
-  ## if all items are requested
-  $items = -1 if (not $items);
-
-  my %arguments = $self->getArguments ( @_ );
-  return undef if (not defined %arguments);
-
-  my $query;
-  my @bind_values; 
-
-  ## Let's make some needed check
-  if (not $arguments{TABLE}) {
-    $self->errno ( $OpenCA::DBI::ERROR->{ MISSING_ARG_TABLE } );
-    return undef;
-  }
-
-  ## I hope the people only search for Certs, Requests and CRRs
-  ## mmh this is impossible
-  my $and = 0;
-  undef @bind_values;
-  $query = "select * from ".$OpenCA::DBI::SQL->{TABLE}->{$arguments{TABLE}};
-  if (defined $from) {
-    $query .= " where (".
-              $OpenCA::DBI::SQL->{VARIABLE}->{$arguments{TABLE}."_SERIAL"}[0]." >= ? ".
-              ")";
-    $bind_values [0] = $from;
-    $and = 1;
-  }
-  if ($arguments{STATUS}) {
-    if ($and) {
-      $query .= " and ";
-    } else {
-      $query .= " where ";
-    }
-    ## the like is necessary for IBM DB2
-    $query .= " (".$OpenCA::DBI::SQL->{VARIABLE}->{STATUS}[0]." like ?)";
-    $bind_values [scalar @bind_values] = $arguments{STATUS};
-    $query .= $self->handleExpiredCert ( \%arguments ) if ($arguments{NOTAFTER}); 
-  }
-  print "  OpenCA::DBI->listItems: query: ".$query."<br>\n" if ($self->{DEBUG});
-
-  ## build query limit
-  my $hquery = $OpenCA::DBI::DB->{$self->{DB_Type}}->{LIMIT};
-  $hquery =~ s/__QUERY__/$query/;
-  $hquery =~ s/__MAXITEMS__/$items/;
-  $query  = $hquery;
-  print "  OpenCA::DBI->listItems: limited query: ".$query."<br>\n" if ($self->{DEBUG});
-
-  ## do_query
-  if ( not defined $self->doQuery (QUERY => $query, BIND_VALUES => \@bind_values) ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SELECT_FAILED} );
-    return undef;
-  }
-
-  my $arrayref;
-  while ($arrayref = $self->{STH}[scalar (@{$self->{STH}}) -1]->fetchrow_arrayref) {
-
-    $tmpObj = $self->getResultItem (ARGUMENTS => \%arguments, ARRAYREF => $arrayref);
-
-    if ( $mode ne "RAW" ) {
-      push (@ret, $tmpObj);
-    } else {
-      push (@ret, $tmpObj->getSerial($dataType));
-    }
-
-    print "  OpenCA::DBI->listItems: added item ".$tmpObj->getSerial($dataType)." to result<br>\n"
-      if ($self->{DEBUG});
-  }
-  
-  print "  listItems completed successful<br>\n".
-        "### leaving function successfully ###<br>\n" if ($self->{DEBUG});
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-  return @ret;
+   	my $self = shift;
+ 	return $self->searchItems ( @_ );
 }
 
 ##################################################
 ## original unchanged functions from OpenCA::DB ##
 ##################################################
-
-# For logical reasons I don't touch this code
-# This is original from OpenCA::DB so please
-# ask Massimiliano Pala if anything is unclear
-# madwolf@openca.org
-#
 
 sub rows {
 
@@ -2081,94 +2894,25 @@ sub rows {
 	return $self->searchItems( MODE=>"ROWS", @_ );
 }
 
-sub byKey { $a->{KEY} <=> $b->{KEY} };
+## ##################################################################
+## Function Name: getSearchAttributes
+## ##################################################################
 
-sub hash2txt {
-  my $self  = shift;
-
-  my $keys = $_[0];
- 
-  my $record = "";
-  my ( $i, $key, $val );
- 
-  for $key (keys %{$keys}) {
-    print "OpenCA::DBI->hash2txt: key=$key val=".$keys->{$key}."<br>\n"
-      if ($self->{DEBUG});
-    if ($keys->{$key} =~ /\n/) {
-      ## multicolumn
-      $record .= "$key=\n".$OpenCA::DBI::beginAttribute.
-                 "\n".$keys->{$key}."\n".$OpenCA::DBI::endAttribute."\n";
-    } else {
-      ## single column
-      $record .= "$key=".$keys->{$key}."\n";
-    }
-  }
-  $record =~ s/(\n)$//;
-
-  print "OpenCA::DBI->hash2txt: record=".$record."<br>\n" if ($self->{DEBUG}); 
-  return $record;
-}
-
-## actually completely unused
-## but present for compatibility reasons
-sub txt2hash {
-        my $self = shift;
-        my $keys = { @_ };
- 
-        my $txt      = $keys->{TXT};
- 
-        my ( $ret, $key, $val, $line );
-
-        ## begin of copy from X509.pm
-
-        my $active_multicolumn = 0;
-        foreach my $i ( split ( /\n/, $txt ) ) {
-                if ($active_multicolumn) {
-                  ## multicolumn
-                  if ($i =~ /^$OpenCA::DBI::endAttribute$/) {
-                    ## end of multicolumn
-                    $active_multicolumn = 0;
-                  } else {
-                    ## additional data
-                    $ret->{key} .= "\n".$i;
-                  }
-                } elsif ($i =~ /^$OpenCA::DBI::beginAttribute$/) {
-                  ## begin of multicolumn
-                  $active_multicolumn = 1;
-                } else {
-                  ## no multicolumn
-                  ## if multicolumn then $ret->{key} is initially empty)                          $i =~ s/\s*=\s*/=/;
-                  ( $key, $val ) = ( $i =~ /(.*)\s*=\s*(.*)\s*/ );
-                  $ret->{$key} = $val;
-                }
-        } 
-
-        ## end of copy from X509.pm
-
-        return $ret;
-} 
-
-#########################################################
-## end of original unchanged functions from OpenCA::DB ##
-#########################################################
-
-###################
-## new functions ##
-###################
-
-## new extended function for getSearchAttributes which doesn't
-## return the index (SERIAL, KEY or DATE)
 sub getSearchAttributes {
+
+	## new extended function for getSearchAttributes which does not
+	## return the index (SERIAL, KEY or DATE)
+
         my $self = shift;
         my $keys = { @_ };
 
-       $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+       $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
         my $type = $keys->{DATATYPE};
         my @ret = ();
 
         if ( not $type ) {
-          $self->errno ( $OpenCA::DBI::ERROR->{MISSING_ARG_DATATYPE} );
+          $self->set_error ( $OpenCA::DBI::ERROR->{MISSING_ARG_DATATYPE} );
           return undef;
         }
 
@@ -2183,13 +2927,27 @@ sub getSearchAttributes {
                          "ROLE",
                          "PUBKEY",
                          "SCEP_TID",
+			 "NOTBEFORE",
+			 "NOTAFTER",
+			 "APPROVED_AFTER",
+			 "ARCHIVED_AFTER",
+			 "DELETED_AFTER",
+	   		 "ROWID",
                          "LOA" );
         } elsif ( $type =~ /CA_CERTIFICATE/ ) {
                 @ret = ( "KEY",
                          "STATUS",
+			 "EXPIRES_BEFORE",
+			 "EXPIRES_AFTER",
+			 "NOTBEFORE",
+			 "NOTAFTER",
+			 "SUSPENDED_AFTER",
+			 "REVOKED_AFTER",
+			 "INVALIDITY_REASON",
                          "DN",
                          "CN",
                          "EMAIL",
+	   		 "ROWID",
                          "PUBKEY" );
         } elsif ( $type =~ /CERTIFICATE/ ) {
                 @ret = ( "KEY",
@@ -2200,6 +2958,14 @@ sub getSearchAttributes {
                          "ROLE",
                          "PUBKEY",
                          "CSR_SERIAL",
+			 "EXPIRES_BEFORE",
+			 "EXPIRES_AFTER",
+			 "NOTBEFORE",
+			 "NOTAFTER",
+			 "SUSPENDED_AFTER",
+			 "REVOKED_AFTER",
+			 "INVALIDITY_REASON",
+	   		 "ROWID",
                          "LOA" );
         } elsif ( $type =~ /CRR/ ) {
                 @ret = ( "KEY",
@@ -2212,66 +2978,114 @@ sub getSearchAttributes {
                          "OPERATOR",
                          "SUBMIT_DATE",
                          "REASON",
+			 "NOTBEFORE",
+			 "NOTAFTER",
+			 "APPROVED_AFTER",
+			 "ARCHIVED_AFTER",
+			 "DELETED_AFTER",
                          "LOA" );
         } elsif ( $type =~ /CRL/ ) {
                 @ret = ( "KEY",
                          "STATUS",
+			 "EXPIRES_BEFORE",
+			 "EXPIRES_AFTER",
                          "LAST_UPDATE",
                          "NEXT_UPDATE" );
+	   		 "ROWID",
+	} elsif ( $type =~ /^USER$/ ) {
+		@ret = ( "USER_ID",
+			 "DATA_SOURCE",
+			 "SECRET",
+			 "NOTBEFORE",
+			 "NOTAFTER",
+			 "STATUS",
+			 "EXTERN_ID",
+			 "SUSPENDED_AFTER",
+			 "REVOKED_AFTER",
+			 "LAST_ACTIVITY",
+	   		 "ROWID",
+			 "INVALIDITY_REASON" );
+	} elsif ( $type =~ /USER_DATA/ ) {
+		@ret = ( "USER_ID",
+			 "NAME",
+	   		 "ROWID",
+			 "DATA_SOURCE" );
+	} elsif ( $type =~ /MESSAGES/ ) {
+		@ret = ( "USER_ID",
+	   		 "ROWID",
+	   		 "FROM",
+	   		 "TO",
+	   		 "SUBJECT",
+	   		 "NOTBEFORE",
+	   		 "HEADER",
+	   		 "DATA",
+	   		 "STATUS" );
         };
 
-        $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+        $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
         return @ret;
 }
 
-## returns now iso-time
+## ##################################################################
+## Function Name: getTimeString
+## ##################################################################
+
 sub getTimeString {
+
+	## returns now iso-time
 
 	my $self = shift;
 	my  ( $ret, @T );
 
 	@T = gmtime( time() );
+
         ## iso is yyyy-mm-dd hh:mm:ss
 	$ret = sprintf( "%4.4d-%2.2d-%2.2d %2.2d:%2.2d:%2.2d",
 			 $T[5]+1900, $T[4], $T[3], $T[2], $T[1], $T[0] );
-	# $ret = sprintf( "%4.4d-%2.2d-%2.2d %2.2d:%2.2d:%2.2d,%6.6d",
-	#		 $T[5]+1900, $T[4], $T[3], $T[2], $T[1], $T[0], ${$} );
 
 	return $ret;
 
 }
 
-## parse the arguments for all functions
+## ##################################################################
+## Function Name: getArguments
+## ##################################################################
+
 sub getArguments {
+
+  ## parse the arguments for all functions
 
   my $self = shift;
   my $keys = { @_ };
   my $check;
 
   my %result;
-  if (exists $keys->{DEBUG})
-  {
+
+  if (exists $keys->{DEBUG}) {
       $self->{DEBUG} = $keys->{DEBUG};
       delete $keys->{DEBUG};
   }
 
-  print "### new function call ###<br>\n".
-        "  Entering getArguments<br>\n" if ($self->{DEBUG});
+  $self->debug ("getArguments: entering function");
 
-  foreach my $key (keys %$keys)
-  {
-      $check->{$key} = $keys->{$key};
-      print "    OpenCA::DBI->getArguments: check: $key=".$check->{$key}."<br>\n"
-          if ($self->{DEBUG});
+  foreach my $key (keys %$keys) {
+	if ( $key ne "" ) {
+      		$check->{$key} = $keys->{$key};
+      		$self->debug ("getArguments: check: $key=".$check->{$key});
+	};
   }
+
+  $result {FROM} = $check->{FROM};
   delete $check->{FROM};
+ 
+  $result {ITEMS} = $check->{ITEMS};
   delete $check->{ITEMS};
  
   $result {TABLE} = $self->getTable ($keys->{DATATYPE});
   $result {MODE}  = $keys->{MODE};
   delete $check->{MODE};
-  print "  OpenCA::DBI->getArguments: TABLE:".$result {TABLE}."<br>\n" if ($self->{DEBUG});
-  print "  OpenCA::DBI->getArguments: MODE:".$result {MODE}."<br>\n" if ($self->{DEBUG});
+  $self->debug ("getArguments: TABLE:".$result {TABLE});
+  $self->debug ("getArguments: MODE:".$result {MODE});
 
   ## get all searchable attributes
   my @attributes = $self->getSearchAttributes( DATATYPE => $result {TABLE} );
@@ -2279,61 +3093,61 @@ sub getArguments {
 
   for $attr ( @attributes ) {
     
-    print "  OpenCA::DBI->getArguments: attribute: ".$attr."<br>\n" if ($self->{DEBUG});
-    if ($attr =~ /^EMAIL$/ and not $keys->{$attr})
-    {
-        $result {EMAIL} = $keys->{EMAILADDRESS};
-        delete $check->{EMAILADDRESS};
-    } else {
-        $result {$attr} = $keys->{$attr};
-        delete $check->{$attr};
-    }
-    print "  OpenCA::DBI->getArguments: value: ".$result {$attr}."<br>\n" if ($self->{DEBUG});      
+    	$self->debug ("getArguments: attribute: $attr");
+
+    	if ($attr =~ /^EMAIL$/ and not $keys->{$attr}) {
+        	$result {EMAIL} = $keys->{EMAILADDRESS};
+        	delete $check->{EMAILADDRESS};
+    	} else {
+        	$result {$attr} = $keys->{$attr};
+        	delete $check->{$attr};
+    	}
+
+    	$self->debug ("getArguments: value: ".$result {$attr});      
   }
 
   ## enforce status
   $result {STATUS} = $self->getStatus ( STATUS   => $result {STATUS},
-                                          DATATYPE => $keys->{DATATYPE} );
-  if ($result {STATUS} =~ /EXPIRED/i) {
-    $result {STATUS} = "VALID";
-    my $today = gmtime;
-    $result {NOTAFTER} =  $self->{backend}->getNumericDate ($today);
-    $result {STATUS_OLD} = "EXPIRED";
-  } elsif ( ($result {STATUS} =~ /VALID/i) and ($result {TABLE} =~ /CERTIFICATE/i) ) {
-    my $today = gmtime;
-    $result {NOTAFTER} =  $self->{backend}->getNumericDate ($today);
-    $result {STATUS_OLD} = "VALID";
-  }
+                                        DATATYPE => $keys->{DATATYPE} );
+
   if (not $result {STATUS}) {
+    $self->debug ("getArguments: no STATUS present");
     delete ($result {STATUS});
-  } elsif ($self->{DEBUG}) {
-    print "  OpenCA::DBI->getArguments: status: ".$result {STATUS}."<br>\n";
+  } else {
+    $self->debug ("getArguments: status: ".$result {STATUS});
   }
   delete $check->{STATUS};
   delete $check->{DATATYPE};
 
-  if (scalar (keys %$check))
-  {
-      if ($self->{DEBUG}) {
-          print "    OpenCA::DBI->getArguments: ILLEGAL ARGUMENT<br>\n";
-          foreach my $key (keys %$check)
-          {
-              print "        $key: ".$check->{$key}."<br>\n";
-          }
+  ## New Parameters - used only for CRL and CERTS for now
+  delete $check->{EXPIRES_BEFORE};
+  delete $check->{EXPIRES_AFTER};
+  delete $check->{ROWID};
+
+  ## madwolf -- DEBUG
+  if (scalar (keys %$check)) {
+      print STDERR "getArguments: ILLEGAL ARGUMENT\n";
+      foreach my $key (keys %$check) {
+          print STDERR "getArguments: [$key] = [".$check->{$key} . "]\n";
       }
-      $self->errno ( $OpenCA::DBI::ERROR->{ILLEGAL_ARGUMENT} );
+      $self->set_error ( $OpenCA::DBI::ERROR->{ILLEGAL_ARGUMENT} );
       return undef;
   }
 
-  print "  completed successful<br>\n".
-        "### leaving function getArguments ###<br>\n" if ($self->{DEBUG});
+  $self->debug ("getArguments: completed successful");
   return %result;
+
 }
 
+## ##################################################################
+## Function Name: getTable
+## ##################################################################
 
-## this is a standardinterface to get the table from the original
-## datatype. so we can use the normal interface of OpenCA::DB
 sub getTable {
+
+  ## this is a standardinterface to get the table from the original
+  ## datatype. so we can use the normal interface of OpenCA::DB
+
   my $self = shift;
   my $datatype = $_[0];
   
@@ -2357,37 +3171,43 @@ sub getTable {
   return $ret;  
 }
 
-## this function support to work with old and new code
-## this means that I check for STATUS and if it is not existent
-## I try to extract it from the datatype
+## ##################################################################
+## Function Name: getStatus
+## ##################################################################
+
 sub getStatus {
+
+  ## this function support to work with old and new code
+  ## this means that I check for STATUS and if it is not existent
+  ## I try to extract it from the datatype
+
   my $self = shift;
   my $keys = { @_ };
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
   my $status   = $keys->{STATUS};
   my $datatype = $keys->{DATATYPE};
 
-  print "### new function call ###<br>\n".
-        "  Entering getStatus<br>\n" if ($self->{DEBUG});
+  $status =~ s/ARCHIVIED/ARCHIVED/;
+  $datatype =~ s/ARCHIVIED/ARCHIVED/;
+
+  $self->debug ("getStatus: Entering function");
 
   if ($status) {
-    print "    status predefined: ".$status."<br>\n" if ($self->{DEBUG});
+    $self->debug ("getStatus: status predefined: $status");
     ## check for legal status
     if ( $OpenCA::DBI::STATUS->{$status} ) {
-      print "  legal status<br>\n".
-            "### leaving function successful ###<br>\n" if ($self->{DEBUG});
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      $self->debug ("getStatus: legal status (leaving function)");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
       return $status;
     } else {
-      print "  illegal status<br>\n".
-            "### leaving function unsuccessful ###<br>\n" if ($self->{DEBUG});
-      $self->errno ( $OpenCA::DBI::ERROR->{ILLEGAL_STATUS} );
+      $self->debug ("getStatus: illegal status (leaving function)");
+      $self->set_error ( $OpenCA::DBI::ERROR->{ILLEGAL_STATUS} );
       return undef;
     }
   } else {
-    print "  no status given using datatype: ".$datatype."<br>\n" if ($self->{DEBUG});
+    $self->debug ("getStatus: no status given using datatype: $datatype");
     ## try to extract status from datatype
     ## erase all behind the first "_" incl. this "_" itself
     my $old = $datatype;
@@ -2395,361 +3215,466 @@ sub getStatus {
     $datatype = $old if ($datatype =~ /^CA$/i);
     $datatype = "" if ($old eq $datatype); 
     $datatype = uc $datatype;
-    print "    given mode is now: \"".$datatype."\"<br>\n" if ($self->{DEBUG});
+    $self->debug ("getStatus: given mode is now: $datatype");
     ## check for legal status
     if ( $datatype =~ /^$/ )
     {
-      print "  no status<br>\n".
-            "### leaving function unsuccessful but without error ###<br>\n" if ($self->{DEBUG});
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      $self->debug ("getStatus: no status (leaving function)");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
       return $datatype;
     } elsif ( $OpenCA::DBI::STATUS->{$datatype} ) {
-      print "  legal status<br>\n".
-            "### leaving function successful ###<br>\n" if ($self->{DEBUG});
-      $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+      $self->debug ("getStatus: legal status (leaving function)");
+      $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
       return $datatype;
     } else {
-      print "  illegal status<br>\n".
-            "### leaving function unsuccessful but without error ###<br>\n" if ($self->{DEBUG});
-      $self->errno ( $OpenCA::DBI::ERROR->{ILLEGAL_STATUS} );
+      $self->debug ("getStatus: illegal status (leaving function)");
+      $self->set_error ( $OpenCA::DBI::ERROR->{ILLEGAL_STATUS} );
       return undef;
     }
   }
 }
 
-sub build_date {
-  my $self = shift;
-  my $date = $_[0];
-  my %help;
-  my $new_date;
-
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
-
-  ##  Mar 10 19:36:45 2001 GMT
-
-  ## Month
-  if ( $date =~ /^ *JAN/i ) {
-    ##  january
-    $help {MONTH} = "01";
-  } elsif ( $date =~ /^ *FEB/i ) {
-    ## february
-    $help {MONTH} = "02";
-  } elsif ( $date =~ /^ *MAR/i ) {
-    ## march
-    $help {MONTH} = "03";
-  } elsif ( $date =~ /^ *APR/i ) {
-    ## april
-    $help {MONTH} = "04";
-  } elsif ( $date =~ /^ *MAY/i ) {
-    ## may
-    $help {MONTH} = "05";
-  } elsif ( $date =~ /^ *JUN/i ) {
-    ## june
-    $help {MONTH} = "06";
-  } elsif ( $date =~ /^ *JUL/i ) {
-    ## july
-    $help {MONTH} = "07";
-  } elsif ( $date =~ /^ *AUG/i ) {
-    ## august
-    $help {MONTH} = "08";
-  } elsif ( $date =~ /^ *SEP/i ) {
-    ## september
-    $help {MONTH} = "09";
-  } elsif ( $date =~ /^ *OCT/i ) {
-    ## october
-    $help {MONTH} = "10";
-  } elsif ( $date =~ /^ *NOV/i ) {
-    ## november
-    $help {MONTH} = "11";
-  } elsif ( $date =~ /^ *DEC/i ) {
-    ## december
-    $help {MONTH} = "12";
-  } else {
-    ## return illegal
-    $self->errno ( $OpenCA::DBI::ERROR->{ILLEGAL_DATE} );
-    return undef;
-  }
-
-  ## day
-  $date =~ s/^ *//;
-  $date = substr ($date, 4, length ($date)-4);
-  $help {DAY} = substr ($date, 0, 2);
-
-  ## hour
-  $help {HOUR} = substr ($date, 3, 2);
-
-  ## minute
-  $help {MINUTE} = substr ($date, 6, 2);
-
-  ## second
-  $help {SECOND} = substr ($date, 9, 2);
-
-  ## year
-  $help {YEAR} = substr ($date, 12, 4);
-
-  ## build date
-  $new_date = $help {YEAR}.
-              $help {MONTH}.
-              $help {DAY}.
-              $help {HOUR}.
-              $help {MINUTE}.
-              $help {SECOND};
-
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-  return $new_date; 
-
-}
+## ##################################################################
+## Function Name: doQuery
+## ##################################################################
 
 sub doQuery {
   my $self = shift;
   my $keys = { @_ };
 
-  $self->errno ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
+  $self->set_error ( $OpenCA::DBI::ERROR->{DO_NOT_COMMIT} );
 
-  print "### new function call ###<br>\n" if ($self->{DEBUG});
-  print "  Entering sub doQuery<br>\n" if ($self->{DEBUG});
+  $self->debug ("doQuery: entering function");
 
   # these variables are in-vars
   my $query     = $keys->{QUERY};
-  my @bind_values = @{$keys->{BIND_VALUES}} if ($keys->{BIND_VALUES});
+  # my @bind_values = @{$keys->{BIND_VALUES}} if ($keys->{BIND_VALUES});
+  my @bind_values = ();
+  my @bind_types = @{$keys->{BIND_TYPES}} if ($keys->{BIND_TYPES});
 
-  print "  query: ".$query."<br>\n" if ($self->{DEBUG});
+  foreach my $help ( @{$keys->{BIND_VALUES}} ) {
+	# if(utf8::is_utf8($help)) {
+	# 	  print STDERR "HELP::VALUE is UTF8 => $help\n";
+	# 	  utf8::decode($help);
+	 #  }
+	  push( @bind_values, $help );
+  }
+
+  $self->debug ("doQuery: query: $query");
+
   foreach my $help (@bind_values) {
-    print "  bind_values: ".$help."<br>\n" if ($self->{DEBUG});
+    ## madwolf -- DEBUG
+    $self->debug ("doQuery: bind_values: $help");
   }
 
   ## query empty so not a DB-failure
   return undef if ($query eq "");
 
   ## prepare
-  print "  prepare statement<br>\n" if ($self->{DEBUG});
-  print "  statement nr.: ".(scalar (@{$self->{STH}}) +1)."<br>\n" if ($self->{DEBUG});
-  $self->{STH}[scalar (@{$self->{STH}})] = $self->{DBH}->prepare ($query);
-  if ( (my $h = $self->{STH}[scalar (@{$self->{STH}}) -1]->state) != 0) {
-    print "  prepare failed<br>\n" if ($self->{DEBUG});
-    print "  query: ".$query."<br>\n" if ($self->{DEBUG});
-    print "  returned errorcode: ".$h."<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{PREPARE_FAILED} );
+  $self->debug ("doQuery: prepare statement");
+  $self->{STH} = $self->{DBH}->prepare ($query);
+  if (not exists $self->{STH} or not defined $self->{STH} or
+      						not ref $self->{STH}) {
+    	## necessary for Oracle
+    	$self->debug ("doQuery: prepare failed");
+    	$self->debug ("doQuery: query: $query");
+    	$self->debug ("doQuery: prepare returned undef");
+    	$self->set_error ( $OpenCA::DBI::ERROR->{PREPARE_FAILED} );
+    	return undef;
+  }
+
+  ## numer of elements in @bind_values and @bind_types have to be equal 
+  if ($#bind_values != $#bind_types) {
+    $self->set_error ($OpenCA::DBI::ERROR->{PREPARE_FAILED});
     return undef;
+  }
+
+  ## binding values to placeholders 
+  my $q_count=0;
+  foreach my $q_value (@bind_values) {
+    $q_count ++;
+    my $q_type = shift(@bind_types);
+    if ( $q_type =~ /DECIMAL/ ) {
+        $self->{STH}->bind_param( $q_count, $q_value, SQL_DECIMAL );
+      } elsif ( $q_type =~ /BIGINT/ ) {
+        $self->{STH}->bind_param( $q_count, $q_value, SQL_BIGINT );
+      } else {
+        $self->{STH}->bind_param( $q_count, $q_value, SQL_UNKNOWN_TYPE );
+    }
   }
 
   ## execute
-  print "      execute statement<br>\n" if ($self->{DEBUG});
-  $self->{STH}[scalar (@{$self->{STH}}) -1]->execute (@bind_values);
-  if (not $self->{STH}[scalar (@{$self->{STH}}) -1]->state) {
-    print "  execute succeeded<br>\n" if ($self->{DEBUG});
-    print "### leaving function doQuery successfully ###<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
-    return 1;
+  $self->debug ("doQuery: execute statement");
+
+  my $result = $self->{STH}->execute ();
+  if (defined $result) {
+    $self->debug ("doQuery: execute succeeded (leaving function - $result)");
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
+    return $result;
   } else {
-    print "  execute failed<br>\n" if ($self->{DEBUG});
-    print "### leaving function doQuery unsuccessfully ###<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{EXECUTE_FAILED} );
+    # print STDERR "doQuery: query: $query\n";
+
+    $self->debug ("doQuery: execute failed (leaving function)");
+    $self->set_error ( $OpenCA::DBI::ERROR->{EXECUTE_FAILED} );
     return undef;
   }
 }
 
-## this function is neccessary because DB2 doesn't support
-## the function fetchrow_hashref
-sub getResultHash {
+## ##################################################################
+## Function Name: getResultItem
+## ##################################################################
 
-  my $self = shift;
-  my $keys = { @_ };
-  my %result;
-
-  print "### new function call ###<br>\n".
-        "  Entering function getResultHash<br>\n" if ($self->{DEBUG});
-
-  for (my $i = 0;
-       $i < scalar (@{$OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$keys->{TABLE}}});
-       $i++) {
-    $result {$OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$keys->{TABLE}}[$i]} =
-      $keys->{ARRAY}->[$i];
-    print "  column:".$OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$keys->{TABLE}}[$i]."<br>\n".
-          "  value:".$keys->{ARRAY}->[$i]."<br>\n" if ($self->{DEBUG});
-  }
-
-  print "### leaving function getResultHash ###<br>\n" if ($self->{DEBUG});
-
-  return %result;
-  
-}
-
-## this function is a ready to build an answer from the arguments and
-## from the resulting array
 sub getResultItem {
 
-  ## parameters are
+  ## this function is a ready to build an answer from the arguments and
+  ## from the resulting array.  Parameters are:
   ##   ARGUMENTS
   ##   ARRAYREF
   
   my $self = shift;
   my $keys = { @_ };
+  my %hash = undef;
 
   my $item;
 
-  print "OpenCA::DBI->getResultItem: ### new function call ###<br>\n".
-        "OpenCA::DBI->getResultItem: Entering sub getResultItem<br>\n" if ($self->{DEBUG});
+  $self->debug ("getResultItem: entering function");
 
   my %arguments = %{$keys->{ARGUMENTS}};
-  return undef if (not defined %arguments);
+  return undef if (not %arguments);
 
   my $arrayref = $keys->{ARRAYREF};;
   return undef if (not defined $arrayref);
 
-  print "OpenCA::DBI->getResultItem: all params present<br>\n" if ($self->{DEBUG}); 
-  my %hash = $self->getResultHash (TABLE => $arguments{TABLE},
-                                   ARRAY => $arrayref);
+  $self->debug ("getResultItem: all params present"); 
+
+  %hash = $self->getResultHash (TABLE => $arguments{TABLE},
+                                ARRAY => $arrayref);
+
+  # foreach my $i ( keys %hash ) {
+  # 	print STDERR "getResultItem: HASH: $i => " . $hash{$i} . "\n";
+  # }
 
   my $data        = $hash{DATA};
   my $priv_format = $hash{FORMAT};
-  print "OpenCA::DBI->getResultItem: data:<br>\n".$data."<br>\n" if ($self->{DEBUG});
-  print "OpenCA::DBI->getResultItem: format: ".$priv_format."<br>\n" if ($self->{DEBUG});
-  print "OpenCA::DBI->getResultItem: have all data<br>\n" if ($self->{DEBUG});
+  my $today = gmtime;
+  my $now = $self->{backend}->getNumericDate( "$today" );
+  my $tempBefore = undef;
+  my $tempAfter = undef;
 
-  print "OpenCA::DBI->getResultItem: data of item:<br>\n".$data."<br>\n" if ($self->{DEBUG});      
+  $self->debug ("getResultItem: data: $data");
+  $self->debug ("getResultItem: format: $priv_format");
+  $self->debug ("getResultItem: have all data");
 
   ## If it was asked only the text version, we send out only that
   ## without generating an OBJECT from it
   if( $arguments{MODE} eq "RAW" ) {
-    print "OpenCA::DBI->getResultItem: return data RAW<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+    $self->debug ("getResultItem: return data RAW");
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
     return $data;
   }
     
   ## Build an Object from retrieved DATA
   if( $arguments{TABLE} =~ /CERTIFICATE/ ) {
+
     $item = new OpenCA::X509( SHELL      => $self->{backend},
+                              GETTEXT    => $self->{gettext},
                               INFORM     => "PEM",
                               DATA       => $data);
+
+    if ( not $item ) {
+	#print STDERR "ERROR::" . $arguments{TABLE} .  "::$data\n";
+	return undef;
+    }
+
+    $item->setStatus( $hash{STATUS} );
+
+    if ( $item->getStatus() =~ /VALID|EXPIRED/ ) {
+	$tempBefore = $self->{backend}->getNumericDate( 
+				$item->getParsed()->{NOTBEFORE} );
+	$tempAfter = $self->{backend}->getNumericDate( 
+				$item->getParsed()->{NOTAFTER} );
+
+	if (( $tempBefore <= $now ) and ( $tempAfter >= $now )) {
+		$item->setStatus( "VALID" );
+	} else {
+		# print STDERR "STATUS CHANGE:: BY CHECK => NOW is $now\n";
+		# print STDERR "STATUS CHANGE:: NOTBEFORE => " .
+		# 		$item->getParsed()->{NOTBEFORE} . "\n";
+		# print STDERR "STATUS CHANGE:: NOTAFTER => " .
+		# 		$item->getParsed()->{NOTAFTER} . "\n";
+
+		$item->setStatus( "EXPIRED" );
+	}
+    }
+
   } elsif ( $arguments{TABLE} eq "CRL" ) {
-    print "OpenCA::DBI->getItem: try to create crl<br>\n" if ($self->{DEBUG});	
+    $self->debug ("getItem: try to create crl");	
     $item = new OpenCA::CRL( SHELL      => $self->{backend},
                              INFORM     => "PEM",
+                             GETTEXT    => $self->{gettext},
                              DATA       => $data);
-    print "OpenCA::DBI->getResultItem: crl there<br>\n" if ($self->{DEBUG} and $item);	
-    print "OpenCA::DBI->getResultItem: crl failed<br>\n" if ($self->{DEBUG} and not $item);	
+
+    $self->debug ("getResultItem: crl there") if ($item);	
+    $self->debug ("ResultItem: crl failed") if (not $item);	
+
+    $item->setStatus( $hash{STATUS} );
+
+    if ( $item->getStatus() =~ /VALID|EXPIRED/ ) { 
+        $tempBefore = $self->{backend}->getNumericDate( 
+				$item->getParsed()->{NOTBEFORE} );
+	$tempAfter = $self->{backend}->getNumericDate( 
+				$item->getParsed()->{NOTAFTER} );
+	if (( $tempBefore <= $now ) and ( $tempAfter >= $now )) {
+		$item->setStatus( "VALID" );
+	} else {
+		$item->setStatus( "EXPIRED" );
+	}
+    }
+
   } elsif ( $arguments{TABLE} =~ /(REQUEST|CRR)/i ) {
     $item = new OpenCA::REQ( SHELL      => $self->{backend},
+                             GETTEXT    => $self->{gettext},
                              DATA       => $data);
+
+    $item->setStatus( $hash{STATUS} );
+
   } else {
     ## if we cannot build the object there is probably
     ## an error, retrun a void ...
-    print "OpenCA::DBI->getResultItem: cannot build object return void<br>\n" if ($self->{DEBUG});
-    $self->errno ( $OpenCA::DBI::ERROR->{ CANNOT_CREATE_OBJECT } );
+    $self->debug ("getResultItem: cannot determine table");
+    $self->set_error ( $OpenCA::DBI::ERROR->{ WRONG_DATATYPE } );
+    return undef;
+  }
+  if (not $item)
+  {
+    $self->debug ("getResultItem: cannot build object return void");
+    $self->set_error ( $OpenCA::DBI::ERROR->{ CANNOT_CREATE_OBJECT } );
     return undef;
   }
 
+  # $item->{STATUS} = $hash{STATUS};
+
   ## who uses DBKEY ?!
   $item->{parsedItem}->{DBKEY} = $arguments{KEY};
+  $item->{parsedItem}->{KEY} = $arguments{KEY};
+  $item->{KEY} = $arguments{KEY};
+
+  $item->{parsedItem}->{ROWID} = $hash { ROWID };
+  $item->{ROWID} = $hash { ROWID };
+
+  $item->{DATATYPE} = $hash{STATUS} . "_" . $arguments{TABLE};
 
   ## We return the object
-  print "OpenCA::DBI->getResultItem: return item<br>\n" if ($self->{DEBUG});
-  $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  $self->debug ("getResultItem: return item");
+  $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
 
   return $item;
       
 } ## end of getResultItem
 
-## rollback never touch the status because 
-## rollback is normally the action if a
-## statement fails
+## ##################################################################
+## Function Name: getResultHash
+## ##################################################################
+
+sub getResultHash {
+
+	## this function is neccessary because DB2 does not support
+	## the function fetchrow_hashref
+
+	my $self = shift;
+	my $keys = { @_ };
+	my @cols = ();
+	my %result;
+
+	$self->debug ("getResultHash: entring function");
+	@cols = @{$OpenCA::DBI::SQL->{TABLE_STRUCTURE}->{$keys->{TABLE}}};
+
+	for (my $i = 0; $i <= $#cols; $i++) {
+		my $val = undef;
+
+		$val = $keys->{ARRAY}->[$i];
+		if ( ($val ne "" ) and (! utf8::is_utf8( $val )) ) {
+		 	utf8::decode($val);
+		}
+
+		$result { $cols[$i]} = $val;
+
+		# print STDERR "getResultHash: " . $keys->{TABLE} . ": " .
+		# 	"HASH{" . $cols[$i] . "} = ".$keys->{ARRAY}->[$i]."\n";
+
+		$self->debug ("getResultHash: column: ".  $cols[$i]);
+		$self->debug ("getResultHash: value: ".$keys->{ARRAY}->[$i]);
+  }
+
+  $self->debug ("getResultHash: leaving function");
+
+  return %result;
+  
+}
+
+## ##################################################################
+## BEGIN BLOCK: DB Management: rollback, commit, disconnect, DESTROY
+## ##################################################################
+
 sub rollback {
+
+  ## rollback never touch the status because 
+  ## rollback is normally the action if a
+  ## statement fails
+
   my $self = shift;
 
-  print "OpenCA::DBI->rollback<br>\n" if ($self->{DEBUG});
+  $self->debug ("rollback: entering function");
 
   ## if there is no databasehandle then we have not to and cannot roll back
   if (not $self->{DBH} or $self->{DBH}->rollback()) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} )
+        if (not $self->errno());
     return 1;
   } else {
-    $self->errno ( $OpenCA::DBI::ERROR->{ROLLBACK_FAILED} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{ROLLBACK_FAILED} );
     return undef;
   }
 }
 
-## commit sets the status-variable
+## Function: commit
+## ================
+
 sub commit {
+  ## commit sets the status-variable
   my $self = shift;
 
-  print "OpenCA::DBI->commit<br>\n" if ($self->{DEBUG});
+  $self->debug ("commit: entering function");
 
-  if ($self->{DBH}->commit() ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  if (not defined $self->{DBH} or $self->{DBH}->commit() ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} )
+        if (not $self->errno());
     return 1;
   } else {
-    $self->errno ( $OpenCA::DBI::ERROR->{COMMIT_FAILED} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{COMMIT_FAILED} );
     return undef;
   }
 }
 
-## disconnect don't set the status-variable because commit
+## Function: disconnect
+## ====================
+## disconnect does not set the status-variable because commit
 ## and rollback called before disconnect so success is not important
+
 sub disconnect {
   
   my $self = shift;
 
-  if ($self->{DBH}->disconnect() ) {
-    $self->errno ( $OpenCA::DBI::ERROR->{SUCCESS} );
+  ## Added to correctly handle the disconnection
+  if( exists $self->{STH} ) {
+  	$self->{STH}->finish();
+  };
+
+  if ( (exists $self->{DBH}) and ($self->{DBH}->disconnect()) ) {
+    $self->set_error ( $OpenCA::DBI::ERROR->{SUCCESS} );
     return 1;
   } else {
-    $self->errno ( $OpenCA::DBI::ERROR->{DISCONNECT_FAILED} );
+    $self->set_error ( $OpenCA::DBI::ERROR->{DISCONNECT_FAILED} );
     return undef;
   }
 }
+
+## Function: DESTROY
+## =================
 
 sub DESTROY {
   my $self = shift;
 
   if ($self->{ERRNO} != $OpenCA::DBI::ERROR->{SUCCESS}) {
-    print "OpenCA::DBI automatic rollback by destructor DESTROY<br>\n" if ($self->{DEBUG});
+    $self->debug ("DESTROY: automatic rollback by destructor DESTROY");
     $self->rollback ();
   } else {
-    print "OpenCA::DBI automatic commit by destructor DESTROY<br>\n" if ($self->{DEBUG});
+    $self->debug ("DESTROY: automatic commit by destructor DESTROY");
     if (not defined $self->commit ()) {
-      print "<FONT COLOR=#FF0000>WARNING commit failed so starting general rollback!</FONT><br>\n";
-      $self->rollback ();
+	$self->debug_err ( "WARNING: commit failed when destroying db handler",
+      			   "WARNING: rollback() called.");
+	$self->rollback ();
     }
   }
   ## finish the statement handles to reduce warnings by DBI
-  print "call finish on all statement handles to avoid warnings by DBI<br>\n" if ($self->{DEBUG});
-  for my $h (@{$self->{STH}}) {
-    $h->finish ();
-  }
+  $self->debug ("DESTROY: call finish on all statement handles to avoid" .
+		" warnings by DBI");
+  $self->{STH}->finish();
 
-  $self->{DBH}->disconnect ();
+  $self->{DBH}->disconnect () if (exists $self->{DBH});
 }
 
-############################
-## begin of errorhandling ##
-############################
+## ##################################################################
+## BEGIN BLOCK: Error Handling 
+## ##################################################################
 
-sub errno {
+sub errno
+{
+  my $self = shift;
+  
+  if ( exists $self->{errno} ) {
+    $self->debug ("errno: returning local errorcode ".$self->{errno});
+    return $self->{errno};
+  } else {
+    $self->debug ("errno: returning global errorcode $OpenCA::DBI::errno");
+    return $OpenCA::DBI::errno;
+  }
+}
+
+sub set_error {
   my $self = shift;
 
-  if ( defined $_[0] ) {
+  $self->debug ("Entering set_error ...");
+
+  ## checking for an explicit error message (from DBI)
+
+  my $message = $OpenCA::DBI::MESSAGE->{$_[0]};
+  $message = $_[1] if ($_[1]);
+
+  ## if gettext was not defined
+  ## then fall back to conventional errormessages
+
+  if (not $self->{gettext})
+  {
+    $self->debug ("set_error: gettext is not defined");
+
+    if (defined $_[0])
+    {
+      $self->{errno}  = $_[0];
+      $self->{errval} = $message;
+    }
+    $self->debug ("set_error: errno and errval set");
+  } else
+  {
+    ## fully i18n error handling
+
+    $self->debug ("errno: gettext is defined");
+    $message = $self->{gettext} ($message);
+
     ## set errorcode
-    $self->{ERRNO} = $_[0];
-    ## this helps us handling crashes during new ()
-    $OpenCA::DBI::ERRNO = $self->{ERRNO};
+    my $old = $self->{errno};
+    $self->{errno} = $_[0];
 
     ## this is the new OpenCA-standard
-    if ($errno)
+    if ($old)
     {
-      $errval = $OpenCA::DBI::MESSAGE->{$OpenCA::DBI::ERRNO}." (error $errno: $errval)";
+      $self->debug ("errno: old errno $old is present");
+
+      ## save the last error too
+      $self->{errval} = $self->{gettext} ("__MESSAGE__ (error __OLD_ERRNO__: __OLD_ERRVAL__)",
+                                  "__MESSAGE__", $message,
+                                  "__OLD_ERRNO__", $old,
+                                  "__OLD_ERRVAL__", $self->{errval});
     } else {
-      $errval = $OpenCA::DBI::MESSAGE->{$OpenCA::DBI::ERRNO};
+      $self->{errval} = $self->{gettext} ($message);
     }
-    $errno  = $OpenCA::DBI::ERRNO;
 
+    $self->debug ("errno: new errorcode is $errno");
   }
+  $errno  = $self->{errno};
+  $errval = $self->{errval};
 
-  if ( defined $self->{ERRNO} ) {
-    return $self->{ERRNO};
-  } else {
-    return $OpenCA::DBI::ERRNO;
-  }
+  return undef;
 }
 
 sub errval {
@@ -2757,35 +3682,37 @@ sub errval {
   my $text = "";
   my $code;
 
-  if ( defined $self->{ERRNO} ) {
-    $code = $self->{ERRNO};
-  } else {
-    $code = $OpenCA::DBI::ERRNO;
-  }
-  
-  ## simple error
-  return $OpenCA::DBI::MESSAGE->{$code};
-
+  return $self->{errval} if ($self->{errval});
+  return $errval;
 }
 
-##########################
-## end of errorhandling ##
-##########################
+sub debug {
+    my $self = shift;
+    my @call = caller ( 1 );
 
-sub handleExpiredCert {
-  my $self = shift;
-  my $arguments = $_[0];
-  my $query ="";
-
-  if ($arguments->{NOTAFTER}) {
-    $query .= " and (".$OpenCA::DBI::SQL->{VARIABLE}->{NOTAFTER}[0];
-    if ($arguments->{STATUS_OLD} =~ /EXPIRED/i) {
-      $query .= " < ";
+    if ($_[0]) {
+        $self->{debug_msg}[scalar @{$self->{debug_msg}}] = $_[0];
+        $self->debug () if ($self->{DEBUG});
     } else {
-      $query .= " > ";
+        my $msg;
+        if ( $self->{DEBUG_STDERR} ) {
+                foreach $msg (@{$self->{debug_msg}}) {
+                    print STDERR "OpenCA::DBI->$msg\n";
+                }
+        }
+        $self->{debug_msg} = ();
     }
-    $query .= $arguments->{NOTAFTER}.")";
-  }
+}
+
+sub debug_err {
+    my $self = shift;
+    my @call = caller ( 1 );
+
+    if ( $self->{DEBUG_STDERR} ) {
+    	foreach my $msg ( @_ ) {
+        	print STDERR "OpenCA::DBI->$msg\n";
+        }
+    }
 }
 
 ##########################
